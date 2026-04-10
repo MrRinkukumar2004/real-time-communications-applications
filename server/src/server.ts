@@ -7,33 +7,81 @@ const server = createServer(app);
 
 const io = new Server(server);
 
+// Available rooms
+const ROOMS = ['general', 'tech', 'random'];
+
+// Helper: get number of users in a specific room
+async function getRoomSize(room: string): Promise<number> {
+    const sockets = await io.in(room).fetchSockets();
+    return sockets.length;
+}
+
 io.on('connection', (socket) => {
     console.log(`[+] User connected    | Socket ID: ${socket.id} | Total: ${io.engine.clientsCount}`);
 
-    // Phase 4: Notify ALL OTHER clients that a new user joined
-    socket.broadcast.emit('user:joined', {
-        id: socket.id,
-        totalUsers: io.engine.clientsCount,
+    // Send available rooms list to the new client
+    socket.emit('room:list', { rooms: ROOMS });
+
+    // Auto-join the 'general' room on connect
+    socket.join('general');
+    socket.data.currentRoom = 'general';
+    console.log(`[room] ${socket.id} joined "general"`);
+
+    // Notify others in 'general' that a new user joined
+    socket.to('general').emit('user:joined', { id: socket.id, room: 'general' });
+
+    // Send room info to the newly connected client
+    getRoomSize('general').then((size) => {
+        socket.emit('room:joined', { room: 'general', userCount: size });
     });
 
-    // Phase 4: Send current user count to the newly connected client
-    socket.emit('user:count', { totalUsers: io.engine.clientsCount });
+    // Phase 5: Join a room
+    socket.on('room:join', async (data, callback) => {
+        const newRoom = data.room;
+        const oldRoom = socket.data.currentRoom;
 
-    // Listen for 'chat:message' event from client
+        if (!ROOMS.includes(newRoom)) {
+            callback({ status: 'error', message: `Room "${newRoom}" does not exist` });
+            return;
+        }
+
+        if (oldRoom === newRoom) {
+            callback({ status: 'error', message: `Already in room "${newRoom}"` });
+            return;
+        }
+
+        // Leave old room
+        socket.leave(oldRoom);
+        socket.to(oldRoom).emit('user:left', { id: socket.id, room: oldRoom });
+        console.log(`[room] ${socket.id} left "${oldRoom}"`);
+
+        // Join new room
+        socket.join(newRoom);
+        socket.data.currentRoom = newRoom;
+        socket.to(newRoom).emit('user:joined', { id: socket.id, room: newRoom });
+        console.log(`[room] ${socket.id} joined "${newRoom}"`);
+
+        const userCount = await getRoomSize(newRoom);
+        callback({ status: 'ok', room: newRoom, userCount });
+    });
+
+    // Phase 5: Chat message — now scoped to the sender's current room
     socket.on('chat:message', (data) => {
-        console.log(`[msg] ${socket.id}: ${data.text}`);
+        const room = socket.data.currentRoom;
+        console.log(`[msg] [${room}] ${socket.id}: ${data.text}`);
 
         const messageData = {
             text: data.text,
             sender: socket.id,
+            room,
             timestamp: Date.now(),
         };
 
-        // Phase 4: io.emit sends to ALL clients (including sender)
-        io.emit('chat:message', messageData);
+        // Send to everyone in the room (including sender)
+        io.to(room).emit('chat:message', messageData);
     });
 
-    // Listen for 'ping:server' event — demonstrates acknowledgement (callback) pattern
+    // Ping/pong acknowledgement (Phase 3)
     socket.on('ping:server', (data, callback) => {
         console.log(`[ping] from ${socket.id}:`, data);
 
@@ -47,11 +95,10 @@ io.on('connection', (socket) => {
     socket.on('disconnect', (reason) => {
         console.log(`[-] User disconnected | Socket ID: ${socket.id} | Reason: ${reason} | Total: ${io.engine.clientsCount}`);
 
-        // Phase 4: Notify ALL remaining clients that a user left
-        socket.broadcast.emit('user:left', {
-            id: socket.id,
-            totalUsers: io.engine.clientsCount,
-        });
+        const room = socket.data.currentRoom;
+        if (room) {
+            socket.to(room).emit('user:left', { id: socket.id, room });
+        }
     });
 });
 

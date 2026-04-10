@@ -166,6 +166,44 @@
             color: #4caf50;
             margin-top: 0.3rem;
         }
+
+        /* Phase 5: Room selector styles */
+        .room-selector {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .room-btn {
+            padding: 0.5rem 1.2rem;
+            border: 1px solid #333;
+            border-radius: 20px;
+            background: #16213e;
+            color: #ccc;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .room-btn:hover {
+            border-color: #e94560;
+            color: #fff;
+        }
+
+        .room-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: #fff;
+            font-weight: bold;
+        }
+
+        #current-room {
+            font-size: 0.9rem;
+            color: #e94560;
+            margin-top: 0.3rem;
+        }
     </style>
 </head>
 <body>
@@ -175,7 +213,11 @@
 
         <div id="status" class="disconnected">Disconnected</div>
         <div id="socket-id">Socket ID: —</div>
-        <div id="user-count">Online: —</div>
+        <div id="user-count">In room: —</div>
+        <div id="current-room">Room: —</div>
+
+        <!-- Phase 5: Room selector (buttons generated dynamically) -->
+        <div class="room-selector" id="room-selector"></div>
 
         <!-- Phase 3: Message form -->
         <form class="message-form" id="message-form">
@@ -216,6 +258,10 @@
         const pingBtn = document.getElementById('ping-btn');
 
         const userCountEl = document.getElementById('user-count');
+        const currentRoomEl = document.getElementById('current-room');
+        const roomSelectorEl = document.getElementById('room-selector');
+
+        let currentRoom = null;
 
         // Helper: add a message to the messages area
         function addMessage(sender, text) {
@@ -287,26 +333,69 @@
             });
         });
 
-        // ──── Phase 4: Broadcasting Events ────
+        // ──── Phase 5: Rooms ────
 
-        // Receive user count on initial connection
-        socket.on('user:count', (data) => {
-            userCountEl.textContent = `Online: ${data.totalUsers}`;
+        // Receive the list of available rooms from server
+        socket.on('room:list', (data) => {
+            roomSelectorEl.innerHTML = '';
+            data.rooms.forEach((room) => {
+                const btn = document.createElement('button');
+                btn.className = 'room-btn';
+                btn.textContent = `#${room}`;
+                btn.dataset.room = room;
+                btn.addEventListener('click', () => joinRoom(room));
+                roomSelectorEl.appendChild(btn);
+            });
         });
 
-        // Another user joined (broadcast — we receive it, they don't)
+        // Confirmation that we joined a room
+        socket.on('room:joined', (data) => {
+            currentRoom = data.room;
+            currentRoomEl.textContent = `Room: #${data.room}`;
+            userCountEl.textContent = `In room: ${data.userCount}`;
+            messagesEl.innerHTML = '';
+            addNotification(`You joined #${data.room}`);
+            updateActiveRoomBtn();
+            addLog(`Joined room: #${data.room} (${data.userCount} users)`);
+        });
+
+        // Another user joined our room
         socket.on('user:joined', (data) => {
-            addNotification(`${data.id.slice(0, 8)}... joined the chat`);
-            userCountEl.textContent = `Online: ${data.totalUsers}`;
-            addLog(`User joined: ${data.id}`);
+            addNotification(`${data.id.slice(0, 8)}... joined #${data.room}`);
+            addLog(`User joined #${data.room}: ${data.id}`);
         });
 
-        // Another user left (broadcast — we receive it, they don't)
+        // Another user left our room
         socket.on('user:left', (data) => {
-            addNotification(`${data.id.slice(0, 8)}... left the chat`);
-            userCountEl.textContent = `Online: ${data.totalUsers}`;
-            addLog(`User left: ${data.id}`);
+            addNotification(`${data.id.slice(0, 8)}... left #${data.room}`);
+            addLog(`User left #${data.room}: ${data.id}`);
         });
+
+        // Join a room (emit with acknowledgement)
+        function joinRoom(room) {
+            if (room === currentRoom) return;
+
+            socket.emit('room:join', { room }, (response) => {
+                if (response.status === 'ok') {
+                    currentRoom = response.room;
+                    currentRoomEl.textContent = `Room: #${response.room}`;
+                    userCountEl.textContent = `In room: ${response.userCount}`;
+                    messagesEl.innerHTML = '';
+                    addNotification(`You switched to #${response.room}`);
+                    updateActiveRoomBtn();
+                    addLog(`Switched to room: #${response.room} (${response.userCount} users)`);
+                } else {
+                    addLog(`Failed to join room: ${response.message}`);
+                }
+            });
+        }
+
+        // Highlight the active room button
+        function updateActiveRoomBtn() {
+            document.querySelectorAll('.room-btn').forEach((btn) => {
+                btn.classList.toggle('active', btn.dataset.room === currentRoom);
+            });
+        }
     </script>
 
 </body>

@@ -8,7 +8,7 @@
 | **Phase 2** | Serving HTML Client & First Client-Server Connection | Done |
 | **Phase 3** | Emitting & Listening to Events (messaging basics) | Done |
 | **Phase 4** | Broadcasting — Send messages to all/other users | Done |
-| **Phase 5** | Rooms & Namespaces — Group chats, channels | Pending |
+| **Phase 5** | Rooms & Namespaces — Group chats, channels | Done |
 | **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Pending |
 | **Phase 7** | Disconnect & Error Handling | Pending |
 | **Phase 8** | CORS, Middleware & Authentication for WebSockets | Pending |
@@ -802,11 +802,230 @@ This is a common pattern: **broadcast to others + direct message to self** to en
 
 ---
 
-## Phase 5: Rooms & Namespaces — Group Chats, Channels (Next)
+## Phase 5: Rooms & Namespaces — Group Chats, Channels (Done)
+
+### What was done
+
+We added chat rooms so users can join different channels. Messages are now scoped to rooms — only users in the same room see each other's messages.
+
+**Files changed:**
+
+```
+server/
+├── public/
+│   └── index.html      ← UPDATED: Room selector buttons, room-scoped UI
+├── src/
+│   └── server.ts       ← UPDATED: Room join/leave, room-scoped messaging, socket.data
+```
+
+**`server.ts`** — Key changes:
+
+```ts
+const ROOMS = ['general', 'tech', 'random'];
+
+// Auto-join 'general' on connect
+socket.join('general');
+socket.data.currentRoom = 'general';
+
+// Join a room (with validation + ack)
+socket.on('room:join', async (data, callback) => {
+    socket.leave(oldRoom);                              // leave old room
+    socket.to(oldRoom).emit('user:left', { ... });      // notify old room
+
+    socket.join(newRoom);                               // join new room
+    socket.to(newRoom).emit('user:joined', { ... });    // notify new room
+    socket.data.currentRoom = newRoom;
+
+    callback({ status: 'ok', room: newRoom, userCount });
+});
+
+// Messages now go to the room, not globally
+socket.on('chat:message', (data) => {
+    io.to(socket.data.currentRoom).emit('chat:message', messageData);
+});
+```
+
+**`index.html`** — Room selector with active state:
+
+```js
+socket.on('room:list', (data) => { /* render room buttons */ });
+
+function joinRoom(room) {
+    socket.emit('room:join', { room }, (response) => {
+        // update UI, clear messages, highlight active button
+    });
+}
+```
+
+---
+
+### How it works
+
+#### Rooms — The Complete Picture:
+
+```
+Socket.IO Server
+│
+├── Room: "general"
+│   ├── Socket A  ← sees messages in #general
+│   └── Socket B  ← sees messages in #general
+│
+├── Room: "tech"
+│   └── Socket C  ← sees messages in #tech only
+│
+└── Room: "random"
+    └── Socket D  ← sees messages in #random only
+
+io.to("general").emit("chat:message", data)
+→ Only Socket A and B receive it
+→ Socket C and D do NOT
+```
+
+#### Key Room Methods:
+
+| Method | What it does |
+|--------|-------------|
+| `socket.join("room")` | Add this socket to a room |
+| `socket.leave("room")` | Remove this socket from a room |
+| `io.to("room").emit()` | Send to ALL sockets in the room (including sender if in room) |
+| `socket.to("room").emit()` | Send to all in room EXCEPT this socket |
+| `io.in("room").fetchSockets()` | Get all socket objects in a room |
+| `socket.rooms` | Set of all rooms this socket is in (includes its own ID) |
+
+#### Key Concept: Every socket is automatically in a room with its own ID
+
+When a socket connects, Socket.IO automatically joins it to a room named after its `socket.id`. This is why `socket.emit()` works — it's actually sending to the room `socket.id`:
+
+```ts
+// These are equivalent:
+socket.emit('hello', data);
+io.to(socket.id).emit('hello', data);
+```
+
+This also means `socket.rooms` always contains at least one entry — its own ID room.
+
+#### Key Concept: `socket.data` — Attaching custom data to a socket
+
+```ts
+socket.data.currentRoom = 'general';
+socket.data.username = 'Alice';
+```
+
+`socket.data` is a plain object where you can store any data associated with this connection. It persists for the lifetime of the socket and is accessible from anywhere you have the socket reference. It also works across servers with the Redis adapter (Phase 9).
+
+#### Key Concept: Rooms vs Namespaces — When to use which?
+
+| Feature | Rooms | Namespaces |
+|---------|-------|------------|
+| Created | Dynamically at runtime | Defined in code (static) |
+| Client connects to | Same connection, server-managed | Separate connection per namespace |
+| Use case | Chat rooms, game lobbies, channels | Separate features (chat, notifications, admin) |
+| Joining | `socket.join(room)` on server only | Client connects with `io("/namespace")` |
+| Multiple at once | A socket can be in MANY rooms | A socket needs separate connection per namespace |
+| Example | `#general`, `#tech`, `#random` | `/chat`, `/notifications`, `/admin` |
+
+**Rule of thumb**: Use **rooms** for grouping users dynamically (channels, lobbies). Use **namespaces** for separating concerns architecturally (different features on different endpoints).
+
+---
+
+### Interview Questions
+
+**Q1: What are Socket.IO rooms and how do they work?**
+
+> Rooms are server-side groupings of sockets. A socket can join one or more rooms using `socket.join(roomName)`. Once in a room, the server can send events to all sockets in that room using `io.to(roomName).emit()`.
+>
+> Key characteristics:
+> - Rooms exist only on the server — clients don't know about them directly
+> - A socket can be in multiple rooms simultaneously
+> - Rooms are created lazily when the first socket joins, and destroyed when the last socket leaves
+> - Every socket is automatically in a room named after its own `socket.id`
+
+---
+
+**Q2: What is the difference between Rooms and Namespaces in Socket.IO?**
+
+> **Namespaces** are separate communication channels defined in code (e.g., `/chat`, `/admin`). Each namespace requires a separate client connection and can have its own middleware, events, and rooms. They're used to separate different features of your app.
+>
+> **Rooms** are dynamic subgroups within a namespace. They're created/destroyed at runtime and managed entirely on the server. A socket can be in multiple rooms within the same namespace.
+>
+> ```
+> Server
+> ├── Namespace: /chat           ← architectural separation
+> │   ├── Room: "general"        ← dynamic grouping
+> │   └── Room: "tech"
+> └── Namespace: /notifications
+>     └── Room: "alerts"
+> ```
+>
+> Think of namespaces as buildings, and rooms as rooms inside a building.
+
+---
+
+**Q3: Can a socket be in multiple rooms at the same time?**
+
+> Yes. A socket can join any number of rooms simultaneously:
+> ```ts
+> socket.join('general');
+> socket.join('announcements');
+> socket.join('team-alpha');
+> console.log(socket.rooms); // Set { socket.id, 'general', 'announcements', 'team-alpha' }
+> ```
+> When you call `io.to('general').emit(...)`, the socket receives it. When you call `io.to('team-alpha').emit(...)`, the same socket also receives it.
+>
+> In our app, we enforce "one room at a time" by calling `socket.leave(oldRoom)` before `socket.join(newRoom)`, but this is an application-level choice, not a Socket.IO limitation.
+
+---
+
+**Q4: How does `io.to(room).emit()` differ from `socket.to(room).emit()`?**
+
+> - **`io.to(room).emit()`** — Sends to ALL sockets in the room, including the current socket if it's a member
+> - **`socket.to(room).emit()`** — Sends to all sockets in the room EXCEPT the current socket (the one calling `.to()`)
+>
+> Use `io.to()` when everyone should receive it (like a chat message the sender should also see). Use `socket.to()` when the sender should be excluded (like a "user is typing" indicator — the typer doesn't need to be told they're typing).
+
+---
+
+**Q5: What is `socket.data` and why is it useful?**
+
+> `socket.data` is a plain JavaScript object attached to each socket for storing custom per-connection data. It's useful for:
+> - Tracking which room a user is in: `socket.data.currentRoom = 'general'`
+> - Storing user info: `socket.data.username = 'Alice'`
+> - Sharing state across event handlers without closures or external maps
+>
+> Key advantage: With the Redis adapter (multi-server setup), `socket.data` is synchronized across servers. So `io.in("room").fetchSockets()` on any server returns sockets with their `data` intact — unlike a local `Map` which only exists on one server.
+
+---
+
+**Q6: How would you send a private (direct) message to a specific user?**
+
+> Since every socket auto-joins a room with its own ID, you can send directly to a specific socket:
+> ```ts
+> // Server-side: send to a specific socket by ID
+> io.to(targetSocketId).emit('private:message', {
+>     from: socket.id,
+>     text: 'Hello, just you!'
+> });
+> ```
+> This works because `targetSocketId` is both the socket's ID and the name of its private room. Only that one socket is in that room, so only they receive the event.
+
+---
+
+**Q7: Rooms are created lazily — what does that mean? How are they cleaned up?**
+
+> Socket.IO doesn't require you to "create" a room before using it. When you call `socket.join('my-room')`, the room is created automatically if it doesn't exist. When the last socket leaves (via `socket.leave()` or disconnect), the room is automatically destroyed — no cleanup code needed.
+>
+> This means:
+> - You don't manage room lifecycle
+> - Room names can be anything (user IDs for DMs, UUIDs for game lobbies)
+> - There's no limit on the number of rooms
+> - Empty rooms consume no memory
+
+---
+
+## Phase 6: User Tracking — Online Users, Nicknames, Typing Indicator (Next)
 
 **What we'll do:**
-1. Create chat rooms that users can join/leave
-2. Send messages only to users in the same room
-3. Understand Rooms vs Namespaces and when to use each
-4. Add a room selector UI on the client
-5. Show room-specific user counts
+1. Add username/nickname support (choose a name on connect)
+2. Track and display the list of online users in the current room
+3. Implement "user is typing..." indicator
+4. Replace socket IDs with usernames in the chat UI
