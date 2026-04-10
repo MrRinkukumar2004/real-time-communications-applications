@@ -80,6 +80,79 @@
         #log p .time {
             color: #888;
         }
+
+        /* Phase 3: Message form styles */
+        .message-form {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        .message-form input {
+            flex: 1;
+            padding: 0.7rem 1rem;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: #16213e;
+            color: #eee;
+            font-size: 1rem;
+            outline: none;
+        }
+
+        .message-form input:focus {
+            border-color: #e94560;
+        }
+
+        .message-form button, .ping-btn {
+            padding: 0.7rem 1.2rem;
+            border: none;
+            border-radius: 8px;
+            background: #e94560;
+            color: #fff;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+
+        .message-form button:hover, .ping-btn:hover {
+            background: #c73652;
+        }
+
+        .ping-btn {
+            margin-top: 0.8rem;
+            background: #0f3460;
+        }
+
+        .ping-btn:hover {
+            background: #1a4a7a;
+        }
+
+        #messages {
+            margin-top: 1rem;
+            text-align: left;
+            background: #16213e;
+            padding: 1rem;
+            border-radius: 8px;
+            max-width: 500px;
+            width: 100%;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        #messages p {
+            padding: 0.4rem 0;
+            border-bottom: 1px solid #1a1a2e;
+        }
+
+        #messages .sender {
+            color: #e94560;
+            font-weight: bold;
+        }
+
+        #messages .msg-text {
+            color: #ccc;
+        }
     </style>
 </head>
 <body>
@@ -90,6 +163,20 @@
         <div id="status" class="disconnected">Disconnected</div>
         <div id="socket-id">Socket ID: —</div>
 
+        <!-- Phase 3: Message form -->
+        <form class="message-form" id="message-form">
+            <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" />
+            <button type="submit">Send</button>
+        </form>
+
+        <!-- Phase 3: Ping button (demonstrates acknowledgements) -->
+        <button class="ping-btn" id="ping-btn">Ping Server (with Ack)</button>
+
+        <!-- Phase 3: Messages area -->
+        <h3 style="margin-top: 1.5rem; color: #e94560;">Messages</h3>
+        <div id="messages"></div>
+
+        <h3 style="margin-top: 1.5rem; color: #888;">Event Log</h3>
         <div id="log"></div>
     </div>
 
@@ -109,10 +196,23 @@
             logEl.prepend(p);
         }
 
+        const messagesEl = document.getElementById('messages');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const pingBtn = document.getElementById('ping-btn');
+
+        // Helper: add a message to the messages area
+        function addMessage(sender, text) {
+            const p = document.createElement('p');
+            p.innerHTML = `<span class="sender">${sender}:</span> <span class="msg-text">${text}</span>`;
+            messagesEl.prepend(p);
+        }
+
         // Connect to the Socket.IO server
         const socket = io();
 
-        // Event: successfully connected
+        // ──── Connection events (Phase 2) ────
+
         socket.on('connect', () => {
             statusEl.textContent = 'Connected';
             statusEl.className = 'connected';
@@ -120,7 +220,6 @@
             addLog('Connected to server');
         });
 
-        // Event: disconnected
         socket.on('disconnect', (reason) => {
             statusEl.textContent = 'Disconnected';
             statusEl.className = 'disconnected';
@@ -128,14 +227,42 @@
             addLog(`Disconnected: ${reason}`);
         });
 
-        // Event: reconnecting
         socket.io.on('reconnect_attempt', (attempt) => {
             addLog(`Reconnection attempt #${attempt}...`);
         });
 
-        // Event: reconnected
         socket.io.on('reconnect', () => {
             addLog('Reconnected!');
+        });
+
+        // ──── Phase 3: Emitting & Listening to Events ────
+
+        // 1. Send message: client → server (emit)
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const text = messageInput.value.trim();
+            if (!text) return;
+
+            // Emit a custom event 'chat:message' with data
+            socket.emit('chat:message', { text });
+            addLog(`Sent: "${text}"`);
+            messageInput.value = '';
+        });
+
+        // 2. Receive message: server → client (listen)
+        socket.on('chat:message', (data) => {
+            const isMe = data.sender === socket.id;
+            addMessage(isMe ? 'You' : data.sender, data.text);
+        });
+
+        // 3. Ping with acknowledgement (callback pattern)
+        pingBtn.addEventListener('click', () => {
+            addLog('Pinging server...');
+
+            // emit with a callback — the server calls this callback as acknowledgement
+            socket.emit('ping:server', { sentAt: Date.now() }, (response) => {
+                addLog(`Ack received: ${response.message} (status: ${response.status})`);
+            });
         });
     </script>
 

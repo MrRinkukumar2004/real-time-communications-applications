@@ -6,7 +6,7 @@
 |-------|-------|--------|
 | **Phase 1** | Project Setup — Express + HTTP Server + Socket.IO | Done |
 | **Phase 2** | Serving HTML Client & First Client-Server Connection | Done |
-| **Phase 3** | Emitting & Listening to Events (messaging basics) | Pending |
+| **Phase 3** | Emitting & Listening to Events (messaging basics) | Done |
 | **Phase 4** | Broadcasting — Send messages to all/other users | Pending |
 | **Phase 5** | Rooms & Namespaces — Group chats, channels | Pending |
 | **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Pending |
@@ -373,11 +373,224 @@ The `disconnect` event provides a `reason` string:
 
 ---
 
-## Phase 3: Emitting & Listening to Events (Next)
+## Phase 3: Emitting & Listening to Events (Done)
+
+### What was done
+
+We added the core Socket.IO communication pattern — emitting and listening to custom events between client and server, plus the acknowledgement (callback) pattern.
+
+**Files changed:**
+
+```
+server/
+├── public/
+│   └── index.html      ← UPDATED: Message form, event handling, ping/ack button
+├── src/
+│   └── server.ts       ← UPDATED: Listens for chat:message & ping:server events
+```
+
+**`server.ts`** — Two new event listeners inside `io.on('connection')`:
+
+```ts
+// 1. Listen for chat messages from client
+socket.on('chat:message', (data) => {
+    console.log(`[msg] ${socket.id}: ${data.text}`);
+
+    // Echo the message back to the SAME client
+    socket.emit('chat:message', {
+        text: data.text,
+        sender: socket.id,
+        timestamp: Date.now(),
+    });
+});
+
+// 2. Acknowledgement pattern — server calls the callback
+socket.on('ping:server', (data, callback) => {
+    console.log(`[ping] from ${socket.id}:`, data);
+
+    callback({
+        status: 'ok',
+        message: 'pong from server!',
+        receivedAt: Date.now(),
+    });
+});
+```
+
+**`index.html`** — Added message form and ping button:
+
+```js
+// Client emits event to server
+socket.emit('chat:message', { text });
+
+// Client listens for event from server
+socket.on('chat:message', (data) => {
+    addMessage(data.sender === socket.id ? 'You' : data.sender, data.text);
+});
+
+// Client emits with acknowledgement callback
+socket.emit('ping:server', { sentAt: Date.now() }, (response) => {
+    // This callback is called by the server — NOT a separate event
+    console.log(response.message); // "pong from server!"
+});
+```
+
+---
+
+### How it works
+
+#### The 3 Communication Patterns in Socket.IO:
+
+```
+Pattern 1: Client → Server (fire and forget)
+┌──────────┐   emit('chat:message', data)   ┌──────────┐
+│  Client   │ ─────────────────────────────► │  Server   │
+└──────────┘                                  └──────────┘
+
+Pattern 2: Server → Client (fire and forget)
+┌──────────┐   emit('chat:message', data)   ┌──────────┐
+│  Server   │ ─────────────────────────────► │  Client   │
+└──────────┘                                  └──────────┘
+
+Pattern 3: Client → Server with Acknowledgement (request-response style)
+┌──────────┐   emit('ping:server', data, callback)   ┌──────────┐
+│  Client   │ ──────────────────────────────────────► │  Server   │
+│           │ ◄────────────────────────────────────── │           │
+└──────────┘   callback({ status: 'ok' })             └──────────┘
+```
+
+#### Key Concept: `emit()` and `on()` — The Event System
+
+Socket.IO uses an **event-based** model (like Node.js EventEmitter):
+
+- **`socket.emit(eventName, data)`** — Sends a custom event with data
+- **`socket.on(eventName, callback)`** — Listens for that event
+
+You can name events anything you want. Convention: use **namespaced names** like `chat:message`, `user:typing`, `room:join` for clarity.
+
+#### Key Concept: Acknowledgements (Callbacks)
+
+Normal `emit` is fire-and-forget — you don't know if the server received it. With acknowledgements:
+
+```js
+// CLIENT: pass a callback as the LAST argument
+socket.emit('ping:server', data, (response) => {
+    // This runs when the server calls the callback
+});
+
+// SERVER: the last parameter is the callback function
+socket.on('ping:server', (data, callback) => {
+    callback({ status: 'ok' }); // This triggers the client's callback
+});
+```
+
+This is like a mini request-response inside WebSocket — useful for confirming actions (message saved, room joined, etc.).
+
+#### Key Concept: Why `socket.emit()` not `io.emit()`?
+
+- **`socket.emit(event, data)`** — Sends to THIS specific client only
+- **`io.emit(event, data)`** — Sends to ALL connected clients (broadcasting — Phase 4)
+
+Right now we use `socket.emit` so the message only goes back to the sender. In Phase 4, we'll use broadcasting to send it to everyone.
+
+---
+
+### Interview Questions
+
+**Q1: What is the difference between `socket.emit()` and `socket.on()`?**
+
+> `socket.emit(eventName, data)` **sends** an event with data to the other side. `socket.on(eventName, callback)` **listens** for an event from the other side. They work as a pair:
+> - Client's `emit` → triggers server's `on`
+> - Server's `emit` → triggers client's `on`
+>
+> Think of it like a walkie-talkie: `emit` = press the button and talk, `on` = listen for incoming.
+
+---
+
+**Q2: What are Socket.IO acknowledgements and when would you use them?**
+
+> Acknowledgements are a callback-based pattern where the emitter passes a function as the last argument, and the receiver calls that function to send a response back. It's like a promise-based request-response within WebSocket.
+>
+> Use cases:
+> - Confirming a message was saved to the database
+> - Validating data before joining a room
+> - Getting a server-computed result back to the client
+>
+> ```js
+> // Client
+> socket.emit('save:message', { text: 'hi' }, (response) => {
+>     if (response.saved) showConfirmation();
+> });
+> // Server
+> socket.on('save:message', async (data, callback) => {
+>     await db.save(data);
+>     callback({ saved: true });
+> });
+> ```
+
+---
+
+**Q3: Can you emit any event name, or are there reserved event names in Socket.IO?**
+
+> You can use any custom event name, but several names are **reserved** and cannot be used:
+> - `connect` / `connection` — fired when a client connects
+> - `disconnect` — fired when a client disconnects
+> - `error` — fired on errors
+> - `disconnecting` — fired BEFORE disconnect (socket still in rooms)
+> - `newListener` / `removeListener` — inherited from EventEmitter
+>
+> Using reserved names for custom events will cause unexpected behavior. Convention: use namespaced names like `chat:message` or `user:join` to avoid collisions.
+
+---
+
+**Q4: What is the difference between `socket.emit()`, `io.emit()`, and `socket.broadcast.emit()`?**
+
+> | Method | Who receives it |
+> |--------|----------------|
+> | `socket.emit()` | Only the specific client (the socket) |
+> | `io.emit()` | ALL connected clients (including sender) |
+> | `socket.broadcast.emit()` | ALL clients EXCEPT the sender |
+>
+> Example: In a chat app, when User A sends a message:
+> - `socket.emit()` → only User A sees it (echo/confirmation)
+> - `io.emit()` → User A, B, C all see it
+> - `socket.broadcast.emit()` → User B, C see it, but NOT User A
+
+---
+
+**Q5: What data types can you send through `socket.emit()`?**
+
+> Socket.IO supports:
+> - **Strings, numbers, booleans, null**
+> - **Objects and arrays** (automatically serialized to JSON)
+> - **Binary data** — `Buffer`, `ArrayBuffer`, `Blob`, `File`
+> - **Mixed** — objects containing binary fields are auto-detected
+>
+> You can send multiple arguments: `socket.emit('event', arg1, arg2, arg3)`
+>
+> You CANNOT send: functions (except the acknowledgement callback), class instances (they lose their prototype), circular references, or `undefined` (gets dropped).
+
+---
+
+**Q6: How is Socket.IO's event system different from REST APIs?**
+
+> | Feature | REST API | Socket.IO Events |
+> |---------|----------|-------------------|
+> | Direction | Client → Server only | Bidirectional |
+> | Connection | New connection per request | Persistent connection |
+> | Pattern | Request-Response only | Fire-and-forget + Ack |
+> | Server-initiated | Not possible (need polling/SSE) | Server can emit anytime |
+> | Overhead | Full HTTP headers each time | Minimal frame headers |
+> | Event naming | HTTP methods (GET, POST) | Any custom name |
+>
+> REST is better for CRUD operations, caching, and stateless APIs. Socket.IO is better for real-time, event-driven, bidirectional communication.
+
+---
+
+## Phase 4: Broadcasting — Send Messages to All/Other Users (Next)
 
 **What we'll do:**
-1. Add a message input form on the client
-2. Emit custom events from client → server (`socket.emit`)
-3. Listen for events on the server (`socket.on`)
-4. Send events from server → client
-5. Understand the event-based communication model
+1. Broadcast messages to ALL connected clients (`io.emit`)
+2. Broadcast to everyone EXCEPT sender (`socket.broadcast.emit`)
+3. Show "user joined" / "user left" notifications to everyone
+4. Display messages from different users in the chat UI
+5. Understand the difference between all broadcasting methods
