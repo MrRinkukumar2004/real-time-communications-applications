@@ -399,6 +399,12 @@
 
             socket.on('error:auth', (data) => { addLog(`Auth error: ${data.message}`); });
 
+            // Phase 10: Server shutdown notification
+            socket.on('server:shutdown', (data) => {
+                addNotification(data.message || 'Server is restarting...');
+                addLog('Server shutdown — will reconnect automatically');
+            });
+
             // ──── Send message ────
 
             messageForm.addEventListener('submit', (e) => {

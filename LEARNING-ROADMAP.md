@@ -13,7 +13,7 @@
 | **Phase 7** | Disconnect & Error Handling | Done |
 | **Phase 8** | CORS, Middleware & Authentication for WebSockets | Done |
 | **Phase 9** | Scaling — Redis adapter, multiple instances | Done |
-| **Phase 10** | Production Deployment & Best Practices | Pending |
+| **Phase 10** | Production Deployment & Best Practices | Done |
 
 ---
 
@@ -2229,11 +2229,365 @@ upstream chat_servers {
 
 ---
 
-## Phase 10: Production Deployment & Best Practices (Next)
+## Phase 10: Production Deployment & Best Practices (Done)
 
-**What we'll do:**
-1. Add environment variables and configuration management
-2. Add structured logging (replacing console.log)
-3. Add graceful shutdown handling
-4. Security hardening checklist
-5. Performance best practices and monitoring
+### What was done
+
+We hardened the app for production with centralized config, structured logging, security middleware, graceful shutdown, and error handling.
+
+**New file structure:**
+
+```
+server/
+├── .env                 ← NEW: Environment variables (gitignored)
+├── .env.example         ← NEW: Template for other developers
+├── src/
+│   ├── config.ts       ← NEW: Centralized config from env vars
+│   ├── logger.ts       ← NEW: Structured logger (JSON in prod, human-readable in dev)
+│   ├── auth.ts         ← UPDATED: Uses config for JWT secret/expiry
+│   ├── app.ts          ← UPDATED: Helmet, CORS middleware, request logging, /health endpoint
+│   ├── server.ts       ← UPDATED: Uses config/logger everywhere, graceful shutdown, error handlers
+│   └── cluster.ts
+├── public/
+│   └── index.html      ← UPDATED: server:shutdown event handler
+```
+
+**`config.ts`** — Single source of truth for all settings:
+
+```ts
+import 'dotenv/config';
+
+export const config = {
+    port: parseInt(process.env.PORT || '3000', 10),
+    nodeEnv: process.env.NODE_ENV || 'development',
+    isProduction: process.env.NODE_ENV === 'production',
+
+    redis: { url: process.env.REDIS_URL || 'redis://localhost:6379' },
+    jwt: {
+        secret: process.env.JWT_SECRET || 'fallback-dev-secret',
+        expiry: process.env.JWT_EXPIRY || '1h',
+    },
+    cors: {
+        origins: (process.env.CORS_ORIGINS || 'http://localhost:3000').split(','),
+    },
+    socketio: {
+        pingInterval: parseInt(process.env.PING_INTERVAL || '25000', 10),
+        pingTimeout: parseInt(process.env.PING_TIMEOUT || '20000', 10),
+        maxDisconnectionDuration: parseInt(process.env.MAX_DISCONNECTION_DURATION || '120000', 10),
+    },
+} as const;
+```
+
+**`logger.ts`** — Structured logging:
+
+```ts
+// Development output:
+// [14:30:25] [INFO ] [socket] User connected | username=Alice socketId=abc123
+
+// Production output (JSON for log aggregators):
+// {"timestamp":"2024-01-01T14:30:25.000Z","level":"info","pid":1234,"context":"socket","message":"User connected","username":"Alice"}
+```
+
+**`app.ts`** — Security middleware:
+
+```ts
+// Helmet — sets security HTTP headers
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            connectSrc: ["'self'", "ws:", "wss:"],
+        },
+    },
+}));
+
+// CORS for REST endpoints
+app.use(cors({ origin: config.cors.origins, credentials: true }));
+
+// Limit JSON body size
+app.use(express.json({ limit: '10kb' }));
+
+// Health check endpoint
+app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime(), timestamp: Date.now() });
+});
+```
+
+**`server.ts`** — Graceful shutdown:
+
+```ts
+async function gracefulShutdown(signal: string) {
+    log.info(`Received ${signal}. Starting graceful shutdown...`);
+
+    server.close();                              // 1. Stop accepting new connections
+    io.emit('server:shutdown', { message });     // 2. Notify all clients
+    for (const s of await io.fetchSockets()) {   // 3. Disconnect all sockets
+        s.disconnect(true);
+    }
+    io.close();                                  // 4. Close Socket.IO
+    await pubClient.quit();                      // 5. Close Redis
+    await subClient.quit();
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('uncaughtException', (err) => { /* log + shutdown */ });
+process.on('unhandledRejection', (reason) => { /* log, don't crash */ });
+```
+
+---
+
+### How it works
+
+#### Environment Variables — The 12-Factor App Pattern:
+
+```
+.env (local, gitignored)          .env.example (committed, template)
+┌─────────────────────────┐      ┌─────────────────────────┐
+│ JWT_SECRET=my-real-secret│      │ JWT_SECRET=change-this   │
+│ REDIS_URL=redis://prod   │      │ REDIS_URL=redis://local  │
+│ NODE_ENV=production      │      │ NODE_ENV=development     │
+└─────────────────────────┘      └─────────────────────────┘
+         │                                │
+         ▼                                ▼
+    config.ts reads                 Developers copy to .env
+    process.env and                 and fill in their values
+    exports typed config
+```
+
+**Why?** Secrets (JWT key, Redis URL) must never be in code. Environment variables let you change settings per environment (dev/staging/prod) without changing code.
+
+#### Structured Logging — Why Replace `console.log`?
+
+| Feature | `console.log` | Structured Logger |
+|---------|--------------|-------------------|
+| Format | Free text | Consistent format |
+| Parsing | Impossible to parse | JSON in prod → parseable by Datadog, ELK, CloudWatch |
+| Context | Manual | Auto-adds timestamp, PID, context |
+| Log levels | None | info, warn, error, debug |
+| Production control | Logs everything | Can suppress debug in prod |
+| Searching | Grep for text | Query by field: `level=error AND context=socket` |
+
+#### Helmet — What Security Headers Does It Set?
+
+```
+X-Content-Type-Options: nosniff       ← Prevents MIME type sniffing
+X-Frame-Options: SAMEORIGIN           ← Prevents clickjacking
+X-XSS-Protection: 0                   ← Disables legacy XSS filter (CSP is better)
+Content-Security-Policy: ...           ← Controls what resources can load
+Strict-Transport-Security: ...         ← Forces HTTPS
+X-Download-Options: noopen             ← Prevents IE from opening downloads
+X-Permitted-Cross-Domain-Policies: none
+Referrer-Policy: no-referrer           ← Controls what's sent in Referer header
+```
+
+One line (`app.use(helmet())`) sets ~10 security headers automatically.
+
+#### Graceful Shutdown — The 5-Step Sequence:
+
+```
+Signal received (SIGTERM/SIGINT)
+  │
+  ├── 1. server.close()          ← Stop accepting NEW connections
+  │                                 (existing connections keep working)
+  │
+  ├── 2. io.emit('shutdown')     ← Notify all clients they'll be disconnected
+  │                                 (client can show "server restarting..." message)
+  │
+  ├── 3. Disconnect all sockets  ← Clean disconnect triggers 'disconnect' event
+  │                                 (rooms, typing indicators clean up properly)
+  │
+  ├── 4. io.close()              ← Close Socket.IO server
+  │
+  ├── 5. Redis quit()            ← Close pub/sub connections gracefully
+  │                                 (flushes pending commands)
+  │
+  └── process.exit(0)            ← Exit with success code
+```
+
+**Why graceful?** Without it, `kill` or `Ctrl+C` immediately kills the process:
+- Clients see "transport close" with no explanation
+- In-flight messages are lost
+- Redis connections leak
+- Load balancer health checks fail abruptly
+
+#### Health Check Endpoint — Why `/health`?
+
+```ts
+app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime(), timestamp: Date.now() });
+});
+```
+
+Used by:
+- **Load balancers**: Route traffic only to healthy servers
+- **Docker**: `HEALTHCHECK` directive to restart unhealthy containers
+- **Kubernetes**: Liveness/readiness probes
+- **Monitoring**: Uptime checks (Pingdom, UptimeRobot)
+
+---
+
+### Interview Questions
+
+**Q1: What is the 12-Factor App methodology and how does it apply to this project?**
+
+> The 12-Factor App is a set of best practices for building production web apps. Key factors we applied:
+>
+> | Factor | Our Implementation |
+> |--------|-------------------|
+> | **III. Config** | Environment variables via `.env` + `config.ts` — no secrets in code |
+> | **VI. Processes** | Stateless workers — state in Redis, not in-memory |
+> | **VIII. Concurrency** | Node.js cluster — scale by adding worker processes |
+> | **IX. Disposability** | Graceful shutdown — fast startup, clean stop |
+> | **XI. Logs** | Structured logs to stdout — let the platform (Docker, K8s) handle routing |
+>
+> The core principle: **the app should be portable between environments** — the same code runs in dev, staging, and production. Only config changes.
+
+---
+
+**Q2: Why use a centralized config module instead of reading `process.env` directly everywhere?**
+
+> 1. **Type safety**: Config module parses strings to correct types (`parseInt` for ports). `process.env.PORT` is always `string | undefined`.
+> 2. **Validation**: Can validate at startup (fail fast if `JWT_SECRET` is missing in production)
+> 3. **Defaults**: Centralized fallback values — no scattered `|| 'default'` across codebase
+> 4. **Discoverability**: All config in one file — easy to see what the app needs
+> 5. **Testing**: Can mock/override the config object in tests
+> 6. **Refactoring**: Change where a value comes from (env var → config file → secrets manager) in one place
+
+---
+
+**Q3: What does Helmet do and why is it important for production?**
+
+> Helmet is Express middleware that sets HTTP security headers to protect against common web attacks:
+>
+> - **Content-Security-Policy**: Prevents XSS by controlling what scripts/styles can execute
+> - **X-Frame-Options**: Prevents clickjacking by blocking iframe embedding
+> - **Strict-Transport-Security**: Forces HTTPS connections
+> - **X-Content-Type-Options**: Prevents MIME sniffing attacks
+>
+> Without these headers, browsers allow dangerous defaults (loading scripts from anywhere, embedding in iframes, etc.). Helmet applies secure defaults with one line of code.
+>
+> For Socket.IO apps, you must customize CSP to allow WebSocket connections: `connectSrc: ["'self'", "ws:", "wss:"]`.
+
+---
+
+**Q4: What is graceful shutdown and why is it critical for production?**
+
+> Graceful shutdown is the process of stopping a server cleanly instead of abruptly killing it:
+>
+> 1. **Stop accepting new connections** — existing ones continue
+> 2. **Finish in-flight requests** — don't drop messages mid-send
+> 3. **Notify connected clients** — they can show UI feedback
+> 4. **Clean up resources** — close database connections, Redis, file handles
+> 5. **Exit with proper code** — so process managers know it was intentional
+>
+> Without it:
+> - Deployments cause dropped connections and lost messages
+> - Redis connections accumulate (connection leak)
+> - Load balancers route to dying servers
+> - Users see unexplained disconnects instead of "server restarting"
+
+---
+
+**Q5: What are `SIGTERM` and `SIGINT` and when is each sent?**
+
+> They are Unix/process signals that request the process to terminate:
+>
+> | Signal | Sent by | When |
+> |--------|---------|------|
+> | `SIGINT` | Terminal | User presses `Ctrl+C` |
+> | `SIGTERM` | System | `docker stop`, `kill <pid>`, Kubernetes pod termination, `pm2 stop` |
+> | `SIGKILL` | System | `kill -9` — cannot be caught, instant death |
+>
+> `SIGTERM` is the standard production signal — it's what Docker sends when stopping a container (with a 10s grace period before `SIGKILL`). Your shutdown handler should complete within that window.
+
+---
+
+**Q6: What is the difference between `uncaughtException` and `unhandledRejection`?**
+
+> - **`uncaughtException`**: A synchronous error was thrown but never caught by a try/catch. This puts Node.js in an unreliable state — you should log the error and shutdown.
+>
+> ```ts
+> // This triggers uncaughtException:
+> throw new Error('oops'); // Not inside try/catch
+> ```
+>
+> - **`unhandledRejection`**: A Promise was rejected but had no `.catch()` or try/catch in an async function. This is recoverable — log it but don't necessarily shutdown.
+>
+> ```ts
+> // This triggers unhandledRejection:
+> async function foo() { throw new Error('oops'); }
+> foo(); // No .catch() and no await inside try/catch
+> ```
+>
+> In production, both should be monitored. `uncaughtException` is more dangerous because the process state is unreliable.
+
+---
+
+**Q7: What is a health check endpoint and why do production systems need it?**
+
+> A health check is a lightweight HTTP endpoint (usually `GET /health`) that returns the server's status:
+>
+> ```json
+> { "status": "ok", "uptime": 3600, "timestamp": 1704067200000 }
+> ```
+>
+> Used by:
+> - **Load balancers**: Only route traffic to healthy instances
+> - **Docker HEALTHCHECK**: Restart containers that stop responding
+> - **Kubernetes probes**: Determine if a pod is ready or needs replacement
+> - **Monitoring tools**: Alert when the service goes down
+>
+> Advanced health checks also verify dependencies:
+> ```ts
+> app.get('/health', async (req, res) => {
+>     const redisOk = await pubClient.ping() === 'PONG';
+>     const status = redisOk ? 'ok' : 'degraded';
+>     res.status(redisOk ? 200 : 503).json({ status, redis: redisOk });
+> });
+> ```
+
+---
+
+## All Phases Complete!
+
+### Final Project Structure
+
+```
+real-time-communications-applications/
+├── docker-compose.yml              ← Redis container
+├── LEARNING-ROADMAP.md             ← This file
+├── server/
+│   ├── .env                        ← Environment variables (gitignored)
+│   ├── .env.example                ← Template for developers
+│   ├── .gitignore
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── public/
+│   │   └── index.html              ← Full chat client (auth, rooms, typing, reconnection)
+│   └── src/
+│       ├── config.ts               ← Centralized config from env vars
+│       ├── logger.ts               ← Structured logging
+│       ├── auth.ts                 ← JWT sign/verify, register/login
+│       ├── app.ts                  ← Express: Helmet, CORS, REST auth, health check
+│       ├── server.ts               ← Socket.IO: Redis adapter, middleware, events, shutdown
+│       └── cluster.ts              ← Multi-worker cluster mode
+```
+
+### What You Learned — Complete Skill Map
+
+| Phase | Skill | Key Concepts |
+|-------|-------|-------------|
+| 1 | **Project Setup** | Express + HTTP server + Socket.IO, TypeScript config |
+| 2 | **Client-Server Connection** | `express.static`, Socket.IO auto-served client, `connect`/`disconnect` |
+| 3 | **Events** | `emit`/`on`, custom events, acknowledgement callbacks |
+| 4 | **Broadcasting** | `socket.emit` vs `io.emit` vs `socket.broadcast.emit` |
+| 5 | **Rooms & Namespaces** | `join`/`leave`, `io.to(room)`, `fetchSockets`, `socket.data` |
+| 6 | **User Tracking** | Usernames, online users list, typing indicator, debouncing |
+| 7 | **Error Handling** | Heartbeat, connection recovery, middleware, `disconnecting`, validation |
+| 8 | **Authentication** | JWT, CORS, REST login + WebSocket auth, `socket.handshake.auth` |
+| 9 | **Scaling** | Redis pub/sub adapter, Node.js cluster, sticky sessions, Docker |
+| 10 | **Production** | Env config, structured logging, Helmet, graceful shutdown, health checks |

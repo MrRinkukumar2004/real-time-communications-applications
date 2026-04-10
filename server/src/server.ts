@@ -1,46 +1,47 @@
 import { createServer } from "node:http";
 import { app } from "./app.js";
 import { verifyToken } from './auth.js';
+import { config } from './config.js';
+import { createLogger } from './logger.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
-
 import { Server } from 'socket.io';
-const port = process.env.PORT || 3000;
+
+const log = createLogger('socket');
+const logRedis = createLogger('redis');
+const logServer = createLogger('server');
+
 const server = createServer(app);
 
-// Phase 9: Configure Socket.IO with CORS + connection options
+// Socket.IO — uses config for all settings
 const io = new Server(server, {
     cors: {
-        origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+        origin: config.cors.origins,
         methods: ['GET', 'POST'],
         credentials: true,
     },
-    pingInterval: 25000,
-    pingTimeout: 20000,
+    pingInterval: config.socketio.pingInterval,
+    pingTimeout: config.socketio.pingTimeout,
     connectionStateRecovery: {
-        maxDisconnectionDuration: 2 * 60 * 1000,
+        maxDisconnectionDuration: config.socketio.maxDisconnectionDuration,
         skipMiddlewares: true,
     },
 });
 
-// Phase 9: Redis Adapter — enables multi-server Socket.IO
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-
-const pubClient = new Redis(REDIS_URL);
+// Redis Adapter
+const pubClient = new Redis(config.redis.url);
 const subClient = pubClient.duplicate();
 
-pubClient.on('connect', () => console.log('[redis] Pub client connected'));
-subClient.on('connect', () => console.log('[redis] Sub client connected'));
-pubClient.on('error', (err) => console.error('[redis] Pub client error:', err.message));
-subClient.on('error', (err) => console.error('[redis] Sub client error:', err.message));
+pubClient.on('connect', () => logRedis.info('Pub client connected'));
+subClient.on('connect', () => logRedis.info('Sub client connected'));
+pubClient.on('error', (err) => logRedis.error('Pub client error', { message: err.message }));
+subClient.on('error', (err) => logRedis.error('Sub client error', { message: err.message }));
 
 io.adapter(createAdapter(pubClient, subClient));
-console.log('[redis] Redis adapter attached');
 
 // Available rooms
 const ROOMS = ['general', 'tech', 'random'];
 
-// Helper: get users list in a specific room (with usernames)
 async function getRoomUsers(room: string) {
     const sockets = await io.in(room).fetchSockets();
     return sockets.map((s) => ({
@@ -49,19 +50,19 @@ async function getRoomUsers(room: string) {
     }));
 }
 
-// Helper: broadcast updated users list to everyone in a room
 async function broadcastRoomUsers(room: string) {
     const users = await getRoomUsers(room);
     io.to(room).emit('room:users', { room, users });
 }
 
-// ──── Phase 7: Server-side middleware ────
+// ──── Middleware ────
 
 // Middleware 1: Logging
 io.use((socket, next) => {
-    const clientIp = socket.handshake.address;
-    const transport = socket.conn.transport.name;
-    console.log(`[middleware:log] Connection attempt | IP: ${clientIp} | Transport: ${transport}`);
+    log.info('Connection attempt', {
+        ip: socket.handshake.address,
+        transport: socket.conn.transport.name,
+    });
     next();
 });
 
@@ -80,7 +81,7 @@ io.use((socket, next) => {
     connectionTimestamps.set(clientIp, recentTimestamps);
 
     if (recentTimestamps.length > maxConnections) {
-        console.log(`[middleware:rate] Rate limited: ${clientIp}`);
+        log.warn('Rate limited', { ip: clientIp, count: recentTimestamps.length });
         next(new Error('Too many connection attempts. Please try again later.'));
         return;
     }
@@ -88,12 +89,12 @@ io.use((socket, next) => {
     next();
 });
 
-// Phase 8: Middleware 3: JWT Authentication
+// Middleware 3: JWT Authentication
 io.use((socket, next) => {
     const token = socket.handshake.auth.token;
 
     if (!token) {
-        console.log(`[middleware:auth] No token provided | Socket: ${socket.id}`);
+        log.warn('No token provided', { socketId: socket.id });
         next(new Error('Authentication required. Please login first.'));
         return;
     }
@@ -101,30 +102,27 @@ io.use((socket, next) => {
     const result = verifyToken(token);
 
     if (!result.valid || !result.payload) {
-        console.log(`[middleware:auth] Invalid token | Socket: ${socket.id} | Reason: ${result.message}`);
+        log.warn('Invalid token', { socketId: socket.id, reason: result.message });
         next(new Error(`Authentication failed: ${result.message}`));
         return;
     }
 
-    // Attach the authenticated username to socket.data
     socket.data.username = result.payload.username;
-    console.log(`[middleware:auth] Authenticated: ${result.payload.username}`);
+    log.info('Authenticated', { username: result.payload.username });
     next();
 });
 
-io.on('connection', async (socket) => {
-    const username = socket.data.username; // Set by JWT middleware
-    console.log(`[+] ${username} connected | Socket ID: ${socket.id} | Recovered: ${socket.recovered} | Total: ${io.engine.clientsCount}`);
+// ──── Connection handler ────
 
-    // Phase 7: If the connection was recovered, restore state
+io.on('connection', async (socket) => {
+    const username = socket.data.username;
+    log.info('User connected', { username, socketId: socket.id, recovered: socket.recovered, total: io.engine.clientsCount });
+
     if (socket.recovered) {
         const room = socket.data.currentRoom;
-        console.log(`[recovery] ${username} recovered in room "${room}"`);
+        log.info('Session recovered', { username, room });
 
-        socket.emit('connection:recovered', {
-            username: socket.data.username,
-            room: socket.data.currentRoom,
-        });
+        socket.emit('connection:recovered', { username, room });
 
         if (room) {
             socket.to(room).emit('user:joined', { id: socket.id, username, room });
@@ -133,20 +131,17 @@ io.on('connection', async (socket) => {
         return;
     }
 
-    // Phase 8: Username is already set by JWT middleware — auto-join 'general'
+    // Auto-join 'general'
     socket.emit('room:list', { rooms: ROOMS });
-
     socket.join('general');
     socket.data.currentRoom = 'general';
-    console.log(`[room] ${username} joined "general"`);
 
     socket.to('general').emit('user:joined', { id: socket.id, username, room: 'general' });
-
     const users = await getRoomUsers('general');
     socket.emit('room:joined', { room: 'general', users });
     broadcastRoomUsers('general');
 
-    // Phase 5: Join a room
+    // Join a room
     socket.on('room:join', async (data, callback) => {
         const newRoom = data.room;
         const oldRoom = socket.data.currentRoom;
@@ -156,34 +151,28 @@ io.on('connection', async (socket) => {
             callback({ status: 'error', message: `Room "${newRoom}" does not exist` });
             return;
         }
-
         if (oldRoom === newRoom) {
             callback({ status: 'error', message: `Already in room "${newRoom}"` });
             return;
         }
 
-        // Leave old room
         socket.leave(oldRoom);
         socket.to(oldRoom).emit('user:left', { id: socket.id, username, room: oldRoom });
         broadcastRoomUsers(oldRoom);
-        console.log(`[room] ${username} left "${oldRoom}"`);
 
-        // Join new room
         socket.join(newRoom);
         socket.data.currentRoom = newRoom;
         socket.to(newRoom).emit('user:joined', { id: socket.id, username, room: newRoom });
-        console.log(`[room] ${username} joined "${newRoom}"`);
 
         const users = await getRoomUsers(newRoom);
         callback({ status: 'ok', room: newRoom, users });
-
-        // Broadcast updated users list to everyone in new room
         broadcastRoomUsers(newRoom);
+
+        log.info('Room switch', { username, from: oldRoom, to: newRoom });
     });
 
-    // Chat message — scoped to the sender's current room
+    // Chat message
     socket.on('chat:message', (data) => {
-        // Phase 7: Guard — must have username set
         if (!socket.data.username) {
             socket.emit('error:auth', { message: 'You must set a username before sending messages' });
             return;
@@ -192,60 +181,42 @@ io.on('connection', async (socket) => {
         const room = socket.data.currentRoom;
         const username = socket.data.username;
 
-        // Phase 7: Validate message data
-        if (!data || typeof data.text !== 'string' || data.text.trim().length === 0) {
-            return; // Silently ignore invalid messages
-        }
+        if (!data || typeof data.text !== 'string' || data.text.trim().length === 0) return;
 
-        const text = data.text.trim().slice(0, 500); // Limit message length to 500 chars
-        console.log(`[msg] [${room}] ${username}: ${text}`);
+        const text = data.text.trim().slice(0, 500);
+        log.debug('Message', { room, username, text: text.slice(0, 50) });
 
-        const messageData = {
+        io.to(room).emit('chat:message', {
             text,
             sender: socket.id,
             username,
             room,
             timestamp: Date.now(),
-        };
-
-        io.to(room).emit('chat:message', messageData);
+        });
     });
 
-    // Phase 6: Typing indicator
+    // Typing indicator
     socket.on('user:typing', (data) => {
         if (!socket.data.username || !socket.data.currentRoom) return;
-
-        const room = socket.data.currentRoom;
-        const username = socket.data.username;
-
-        socket.to(room).emit('user:typing', {
+        socket.to(socket.data.currentRoom).emit('user:typing', {
             id: socket.id,
-            username,
+            username: socket.data.username,
             isTyping: data.isTyping,
         });
     });
 
-    // Ping/pong acknowledgement (Phase 3)
+    // Ping/pong
     socket.on('ping:server', (data, callback) => {
-        console.log(`[ping] from ${socket.id}:`, data);
-
-        callback({
-            status: 'ok',
-            message: 'pong from server!',
-            receivedAt: Date.now(),
-        });
+        callback({ status: 'ok', message: 'pong from server!', receivedAt: Date.now() });
     });
 
-    // Phase 7: Handle the 'disconnecting' event — fires BEFORE leaving rooms
     socket.on('disconnecting', (reason) => {
-        const username = socket.data.username || 'Anonymous';
-        console.log(`[~] ${username} disconnecting | Reason: ${reason} | Rooms: ${[...socket.rooms].join(', ')}`);
-        // socket.rooms is still available here — the socket hasn't left yet
+        log.debug('Disconnecting', { username: socket.data.username, reason, rooms: [...socket.rooms].join(', ') });
     });
 
     socket.on('disconnect', (reason) => {
         const username = socket.data.username || 'Anonymous';
-        console.log(`[-] ${username} disconnected | Socket ID: ${socket.id} | Reason: ${reason} | Total: ${io.engine.clientsCount}`);
+        log.info('User disconnected', { username, socketId: socket.id, reason, total: io.engine.clientsCount });
 
         const room = socket.data.currentRoom;
         if (room) {
@@ -255,11 +226,70 @@ io.on('connection', async (socket) => {
     });
 });
 
-// Phase 7: Global error handler — catches unhandled errors in event handlers
+// Engine-level error handler
 io.engine.on('connection_error', (err: { req: unknown; code: number; message: string; context: unknown }) => {
-    console.error(`[engine] Connection error: code=${err.code} message=${err.message}`);
+    log.error('Engine connection error', { code: err.code, message: err.message });
 });
 
-server.listen(port, () => {
-    console.log(`\nReal time communications application is running on : http://localhost:${port} `)
-})
+// ──── Phase 10: Graceful Shutdown ────
+
+async function gracefulShutdown(signal: string) {
+    logServer.info(`Received ${signal}. Starting graceful shutdown...`);
+
+    // 1. Stop accepting new connections
+    server.close(() => {
+        logServer.info('HTTP server closed');
+    });
+
+    // 2. Notify all connected clients
+    io.emit('server:shutdown', { message: 'Server is restarting. You will be reconnected automatically.' });
+
+    // 3. Close all socket connections
+    const sockets = await io.fetchSockets();
+    logServer.info(`Disconnecting ${sockets.length} sockets...`);
+    for (const s of sockets) {
+        s.disconnect(true);
+    }
+
+    // 4. Close Socket.IO server
+    io.close(() => {
+        logServer.info('Socket.IO server closed');
+    });
+
+    // 5. Close Redis connections
+    try {
+        await pubClient.quit();
+        await subClient.quit();
+        logRedis.info('Redis connections closed');
+    } catch (err) {
+        logRedis.error('Error closing Redis', { message: (err as Error).message });
+    }
+
+    logServer.info('Graceful shutdown complete');
+    process.exit(0);
+}
+
+// Listen for termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Catch unhandled errors (don't crash the server)
+process.on('uncaughtException', (err) => {
+    logServer.error('Uncaught exception', { message: err.message, stack: err.stack });
+    gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason) => {
+    logServer.error('Unhandled rejection', { reason: String(reason) });
+});
+
+// ──── Start server ────
+
+server.listen(config.port, () => {
+    logServer.info(`Server running`, {
+        port: config.port,
+        env: config.nodeEnv,
+        pid: process.pid,
+        url: `http://localhost:${config.port}`,
+    });
+});

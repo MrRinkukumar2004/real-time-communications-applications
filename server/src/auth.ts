@@ -1,8 +1,5 @@
 import jwt from 'jsonwebtoken';
-
-// In production, use environment variables for secrets
-const JWT_SECRET = 'your-secret-key-change-in-production';
-const TOKEN_EXPIRY = '1h';
+import { config } from './config.js';
 
 export interface UserPayload {
     username: string;
@@ -36,13 +33,13 @@ export function loginUser(username: string, password: string): { success: boolea
         return { success: false, message: 'Invalid username or password' };
     }
 
-    const token = jwt.sign({ username } as UserPayload, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+    const token = jwt.sign({ username } as UserPayload, config.jwt.secret, { expiresIn: config.jwt.expiry });
     return { success: true, token, message: 'Login successful' };
 }
 
 export function verifyToken(token: string): { valid: boolean; payload?: UserPayload; message: string } {
     try {
-        const payload = jwt.verify(token, JWT_SECRET) as UserPayload;
+        const payload = jwt.verify(token, config.jwt.secret) as UserPayload;
         return { valid: true, payload, message: 'Token valid' };
     } catch (err) {
         if (err instanceof jwt.TokenExpiredError) {
