@@ -5,8 +5,12 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon src/server.ts",
+    "dev:cluster": "tsx src/cluster.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "start:cluster": "node dist/cluster.js",
+    "redis:start": "docker compose up -d redis",
+    "redis:stop": "docker compose down"
   },
   "keywords": [],
   "author": "",
@@ -23,9 +27,13 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
+    "@socket.io/cluster-adapter": "^0.3.0",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@socket.io/sticky": "^1.0.4",
     "@types/nodemon": "^1.19.6",
     "@types/socket.io": "^3.0.1",
     "express": "^5.2.1",
+    "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",
     "nodemon": "^3.1.14",
     "socket.io": "^4.8.3"

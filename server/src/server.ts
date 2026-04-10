@@ -1,30 +1,41 @@
 import { createServer } from "node:http";
 import { app } from "./app.js";
 import { verifyToken } from './auth.js';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { Redis } from 'ioredis';
 
 import { Server } from 'socket.io';
 const port = process.env.PORT || 3000;
 const server = createServer(app);
 
-// Phase 8: Configure Socket.IO with CORS + connection options
+// Phase 9: Configure Socket.IO with CORS + connection options
 const io = new Server(server, {
-    // CORS configuration — which origins can connect via WebSocket
     cors: {
-        origin: ['http://localhost:3000', 'http://127.0.0.1:3000'], // Allowed origins
-        methods: ['GET', 'POST'],        // Allowed HTTP methods for handshake
-        credentials: true,                // Allow cookies/auth headers
+        origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+        methods: ['GET', 'POST'],
+        credentials: true,
     },
-
-    // Heartbeat config
     pingInterval: 25000,
     pingTimeout: 20000,
-
-    // Connection state recovery
     connectionStateRecovery: {
         maxDisconnectionDuration: 2 * 60 * 1000,
         skipMiddlewares: true,
     },
 });
+
+// Phase 9: Redis Adapter — enables multi-server Socket.IO
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+
+const pubClient = new Redis(REDIS_URL);
+const subClient = pubClient.duplicate();
+
+pubClient.on('connect', () => console.log('[redis] Pub client connected'));
+subClient.on('connect', () => console.log('[redis] Sub client connected'));
+pubClient.on('error', (err) => console.error('[redis] Pub client error:', err.message));
+subClient.on('error', (err) => console.error('[redis] Sub client error:', err.message));
+
+io.adapter(createAdapter(pubClient, subClient));
+console.log('[redis] Redis adapter attached');
 
 // Available rooms
 const ROOMS = ['general', 'tech', 'random'];

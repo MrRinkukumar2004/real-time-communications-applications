@@ -12,7 +12,7 @@
 | **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Done |
 | **Phase 7** | Disconnect & Error Handling | Done |
 | **Phase 8** | CORS, Middleware & Authentication for WebSockets | Done |
-| **Phase 9** | Scaling — Redis adapter, multiple instances | Pending |
+| **Phase 9** | Scaling — Redis adapter, multiple instances | Done |
 | **Phase 10** | Production Deployment & Best Practices | Pending |
 
 ---
@@ -1916,11 +1916,324 @@ This is more secure: unauthenticated clients never establish a WebSocket connect
 
 ---
 
-## Phase 9: Scaling — Redis Adapter, Multiple Instances (Next)
+## Phase 9: Scaling — Redis Adapter, Multiple Instances (Done)
+
+### What was done
+
+We added Redis (via Docker) as a pub/sub backbone so multiple Socket.IO server instances can communicate. Messages sent on one server are automatically delivered to clients on ALL servers.
+
+**New file structure:**
+
+```
+project-root/
+├── docker-compose.yml       ← NEW: Redis container (redis:7-alpine)
+├── server/
+│   ├── src/
+│   │   ├── cluster.ts      ← NEW: Node.js cluster — spawns multiple workers
+│   │   ├── server.ts       ← UPDATED: Redis adapter (pub/sub clients)
+│   │   ├── app.ts
+│   │   └── auth.ts
+│   └── package.json        ← UPDATED: New scripts (dev:cluster, redis:start, redis:stop)
+```
+
+**`docker-compose.yml`** — Redis container:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+```
+
+**`server.ts`** — Redis adapter integration:
+
+```ts
+import { createAdapter } from '@socket.io/redis-adapter';
+import { Redis } from 'ioredis';
+
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+
+// Two Redis clients: one publishes events, one subscribes
+const pubClient = new Redis(REDIS_URL);
+const subClient = pubClient.duplicate();
+
+// Attach the adapter — this is all it takes!
+io.adapter(createAdapter(pubClient, subClient));
+```
+
+**`cluster.ts`** — Node.js cluster for multiple workers:
+
+```ts
+import cluster from 'node:cluster';
+
+const NUM_WORKERS = 3;
+const BASE_PORT = 3000;
+
+if (cluster.isPrimary) {
+    for (let i = 0; i < NUM_WORKERS; i++) {
+        cluster.fork({ PORT: String(BASE_PORT + i) });
+    }
+} else {
+    import('./server.js'); // Each worker runs the full server
+}
+```
+
+**`package.json`** — New scripts:
+
+```json
+{
+  "scripts": {
+    "dev": "nodemon src/server.ts",
+    "dev:cluster": "tsx src/cluster.ts",
+    "redis:start": "docker compose up -d redis",
+    "redis:stop": "docker compose down"
+  }
+}
+```
+
+---
+
+### How it works
+
+#### The Problem: Why a Single Server Doesn't Scale
+
+```
+Single server (Phase 1-8):
+
+Client A ──► Server 1 ──► Client B     ✓ Works! Both on same server.
+Client C ──► Server 1 ──► Client D     ✓ Works!
+
+With load balancer (BROKEN without Redis):
+
+Client A ──► Server 1                  Server 1 has A, B
+Client B ──► Server 1                  Server 2 has C, D
+Client C ──► Server 2
+Client D ──► Server 2
+
+A sends a message → Server 1 broadcasts → only B receives it
+C and D on Server 2 NEVER get the message! ✗
+```
+
+Each server instance only knows about its own connected clients. `io.emit()` only sends to sockets on THAT server.
+
+#### The Solution: Redis Pub/Sub Adapter
+
+```
+Client A ──► Server 1 ──┐
+Client B ──► Server 1    │
+                         ├──► Redis (pub/sub) ──► All servers receive
+Client C ──► Server 2    │
+Client D ──► Server 2 ──┘
+
+A sends a message:
+1. Server 1 receives it
+2. Server 1 publishes to Redis channel
+3. Redis delivers to ALL subscribers (Server 1 + Server 2)
+4. Each server broadcasts to its own clients
+5. A, B, C, D ALL receive the message ✓
+```
+
+#### Key Concept: Two Redis Clients — Why?
+
+```ts
+const pubClient = new Redis(REDIS_URL);   // Publishes events TO Redis
+const subClient = pubClient.duplicate();  // Subscribes to events FROM Redis
+```
+
+Redis pub/sub requires **separate connections** for publishing and subscribing. A client in SUBSCRIBE mode can ONLY receive messages — it can't publish. So we need two:
+
+- **pubClient**: When `io.emit()` is called, the adapter publishes the event to a Redis channel
+- **subClient**: Listens for events from Redis and delivers them to local sockets
+
+`.duplicate()` creates a new connection with the same config — no need to repeat the URL.
+
+#### Key Concept: What the Adapter Does Behind the Scenes
+
+When you call `io.to("general").emit("chat:message", data)`:
+
+**Without adapter (single server):**
+1. Find all sockets in room "general" on this server
+2. Send the event to each
+
+**With Redis adapter:**
+1. Serialize the event: `{ room: "general", event: "chat:message", data }`
+2. Publish to Redis channel `socket.io#/#`
+3. Every server's subClient receives it
+4. Each server finds its LOCAL sockets in room "general"
+5. Each server sends the event to its local sockets
+
+The adapter makes `io.emit()`, `socket.broadcast.emit()`, `io.to(room).emit()`, and `fetchSockets()` all work transparently across servers.
+
+#### Key Concept: Docker Compose for Redis
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine        # Lightweight Alpine-based Redis
+    ports:
+      - "6379:6379"              # Expose on default Redis port
+    command: redis-server --appendonly yes  # Persist data to disk
+```
+
+Commands:
+- `docker compose up -d redis` — Start Redis in background
+- `docker compose down` — Stop and remove Redis container
+- `docker compose logs redis` — View Redis logs
+
+#### Key Concept: Node.js Cluster Module
+
+```ts
+if (cluster.isPrimary) {
+    // This process is the manager — it doesn't handle HTTP
+    for (let i = 0; i < NUM_WORKERS; i++) {
+        cluster.fork({ PORT: String(3000 + i) });
+    }
+} else {
+    // Each forked process is a worker — runs the full server
+    import('./server.js');
+}
+```
+
+- **Primary process**: Spawns workers, restarts them if they crash
+- **Worker process**: Each is a separate Node.js process with its own memory, event loop, and port
+- Workers share nothing — Redis is what connects them
+
+#### Key Concept: Sticky Sessions (Important for Production)
+
+Socket.IO's connection starts with HTTP polling, then upgrades to WebSocket. If a load balancer sends the HTTP requests to Server 1 but the WebSocket to Server 2, the connection breaks.
+
+**Sticky sessions** ensure all requests from the same client go to the same server:
+
+```
+Client A ──► Load Balancer ──► Always Server 1  (based on cookie/IP)
+Client B ──► Load Balancer ──► Always Server 2
+```
+
+Our cluster mode uses different ports (3000, 3001, 3002) instead of a load balancer, so sticky sessions aren't needed for testing. In production with nginx:
+
+```nginx
+upstream chat_servers {
+    ip_hash;  # Sticky sessions based on client IP
+    server 127.0.0.1:3000;
+    server 127.0.0.1:3001;
+    server 127.0.0.1:3002;
+}
+```
+
+---
+
+### Interview Questions
+
+**Q1: Why can't you scale Socket.IO by just adding more servers behind a load balancer?**
+
+> Each Socket.IO server instance maintains its own in-memory set of connected sockets and rooms. When Server 1 calls `io.emit()`, it only sends to sockets connected to Server 1. Clients on Server 2 never receive the message.
+>
+> To fix this, you need a **message broker** (like Redis) that acts as a communication bridge between servers. The Redis adapter publishes events to a Redis pub/sub channel, and all servers subscribe to that channel, so every server can deliver every event to its local clients.
+
+---
+
+**Q2: How does the Socket.IO Redis adapter work?**
+
+> The adapter uses Redis pub/sub as a message bus between Socket.IO servers:
+>
+> 1. Server A calls `io.to("room").emit("event", data)`
+> 2. The adapter serializes this into a message and publishes it to a Redis channel
+> 3. All servers (including A) receive the message via their subscription
+> 4. Each server checks if it has any local sockets in that room
+> 5. If yes, it delivers the event to those sockets
+>
+> This makes `io.emit()`, `socket.broadcast.emit()`, `io.to(room).emit()`, and even `fetchSockets()` work transparently across multiple servers. No code changes needed — just attach the adapter.
+
+---
+
+**Q3: Why does the Redis adapter need TWO Redis connections (pub and sub)?**
+
+> Redis pub/sub has a protocol-level constraint: once a connection enters SUBSCRIBE mode, it can only receive messages — it cannot publish or run any other commands.
+>
+> So Socket.IO needs:
+> - **pubClient**: Stays in normal mode — publishes events to Redis when `io.emit()` is called
+> - **subClient**: Enters SUBSCRIBE mode — listens for events from other servers
+>
+> Using a single client for both would fail because SUBSCRIBE blocks the connection from doing anything else.
+
+---
+
+**Q4: What are sticky sessions and why are they needed with Socket.IO?**
+
+> Sticky sessions ensure that all HTTP requests from the same client are routed to the same server.
+>
+> Socket.IO needs them because:
+> 1. The connection starts with HTTP long-polling (multiple HTTP requests)
+> 2. It then upgrades to WebSocket
+> 3. If request 1 goes to Server A (creates a session) but request 2 goes to Server B (no session), the handshake fails
+>
+> Implementation options:
+> - **IP hash**: Route based on client IP (`ip_hash` in nginx)
+> - **Cookie-based**: Set a cookie on first request, route by cookie value
+> - **WebSocket-only transport**: Skip polling entirely: `io({ transports: ['websocket'] })` — no sticky sessions needed, but loses the polling fallback
+
+---
+
+**Q5: What is the difference between the Redis adapter and the Cluster adapter?**
+
+> | Feature | Redis Adapter | Cluster Adapter |
+> |---------|--------------|-----------------|
+> | Communication | Redis pub/sub (network) | IPC (inter-process communication) |
+> | Multiple machines | Yes — any server with Redis access | No — same machine only |
+> | Dependency | Requires Redis server | No external dependencies |
+> | Use case | Production, multi-machine | Single machine, Node.js cluster |
+> | Performance | Network latency (~1ms) | IPC is faster (sub-ms) |
+> | Persistence | Redis can persist messages | No persistence |
+>
+> For single-machine scaling, the Cluster adapter is simpler. For multi-machine production, the Redis adapter is the standard choice.
+
+---
+
+**Q6: What happens if Redis goes down while the Socket.IO servers are running?**
+
+> - **Existing connections stay alive** — WebSocket connections are between client and server, not through Redis
+> - **Local events still work** — `io.emit()` on a single server still reaches its own clients
+> - **Cross-server events break** — messages from Server 1 won't reach clients on Server 2
+> - **New connections may fail** — if the adapter can't reach Redis during connection setup
+> - **Recovery**: When Redis comes back, the pub/sub subscriptions auto-reconnect (ioredis handles this)
+>
+> Production mitigation: Redis Sentinel or Redis Cluster for high availability, plus health checks to detect and alert on Redis failures.
+
+---
+
+**Q7: How would you deploy this in production with a load balancer?**
+
+> ```
+> Internet
+>     │
+>     ▼
+> Nginx / AWS ALB (load balancer)
+>     │  (sticky sessions: ip_hash or cookie)
+>     ├──► Socket.IO Server 1 (PM2 or Docker)
+>     ├──► Socket.IO Server 2
+>     └──► Socket.IO Server 3
+>              │
+>              ▼
+>         Redis (Sentinel or Cluster for HA)
+> ```
+>
+> Steps:
+> 1. **Redis**: Use managed Redis (AWS ElastiCache, Redis Cloud) or Redis Sentinel
+> 2. **App servers**: Run with PM2 cluster mode or Docker containers
+> 3. **Load balancer**: Nginx with `ip_hash` or AWS ALB with sticky sessions enabled
+> 4. **WebSocket support**: Ensure LB supports WebSocket upgrade (nginx: `proxy_set_header Upgrade`)
+> 5. **Environment**: Set `REDIS_URL` env var on each server
+> 6. **Health checks**: Monitor Redis connectivity and server health
+
+---
+
+## Phase 10: Production Deployment & Best Practices (Next)
 
 **What we'll do:**
-1. Understand why a single Socket.IO server doesn't scale
-2. Install and configure the Redis adapter
-3. Run multiple server instances behind a load balancer
-4. Test that messages work across server instances
-5. Understand sticky sessions and why they're needed
+1. Add environment variables and configuration management
+2. Add structured logging (replacing console.log)
+3. Add graceful shutdown handling
+4. Security hardening checklist
+5. Performance best practices and monitoring
