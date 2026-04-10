@@ -7,7 +7,7 @@
 | **Phase 1** | Project Setup — Express + HTTP Server + Socket.IO | Done |
 | **Phase 2** | Serving HTML Client & First Client-Server Connection | Done |
 | **Phase 3** | Emitting & Listening to Events (messaging basics) | Done |
-| **Phase 4** | Broadcasting — Send messages to all/other users | Pending |
+| **Phase 4** | Broadcasting — Send messages to all/other users | Done |
 | **Phase 5** | Rooms & Namespaces — Group chats, channels | Pending |
 | **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Pending |
 | **Phase 7** | Disconnect & Error Handling | Pending |
@@ -586,11 +586,227 @@ Right now we use `socket.emit` so the message only goes back to the sender. In P
 
 ---
 
-## Phase 4: Broadcasting — Send Messages to All/Other Users (Next)
+## Phase 4: Broadcasting — Send Messages to All/Other Users (Done)
+
+### What was done
+
+We upgraded from single-client echo to real multi-user communication. Messages now go to ALL connected clients, and join/leave notifications are broadcast to others.
+
+**Files changed:**
+
+```
+server/
+├── public/
+│   └── index.html      ← UPDATED: User count display, join/leave notifications, multi-user messages
+├── src/
+│   └── server.ts       ← UPDATED: io.emit for chat, socket.broadcast.emit for join/leave
+```
+
+**`server.ts`** — Key changes inside `io.on('connection')`:
+
+```ts
+// Phase 3 (before): socket.emit → sends only to sender
+socket.emit('chat:message', messageData);
+
+// Phase 4 (now): io.emit → sends to ALL connected clients
+io.emit('chat:message', messageData);
+
+// Notify others when someone joins (broadcast = everyone EXCEPT sender)
+socket.broadcast.emit('user:joined', {
+    id: socket.id,
+    totalUsers: io.engine.clientsCount,
+});
+
+// Notify others when someone leaves
+socket.broadcast.emit('user:left', {
+    id: socket.id,
+    totalUsers: io.engine.clientsCount,
+});
+
+// Send user count to the newly connected client only
+socket.emit('user:count', { totalUsers: io.engine.clientsCount });
+```
+
+**`index.html`** — New event listeners:
+
+```js
+// Join/leave notifications
+socket.on('user:joined', (data) => {
+    addNotification(`${data.id.slice(0, 8)}... joined the chat`);
+    userCountEl.textContent = `Online: ${data.totalUsers}`;
+});
+
+socket.on('user:left', (data) => {
+    addNotification(`${data.id.slice(0, 8)}... left the chat`);
+    userCountEl.textContent = `Online: ${data.totalUsers}`;
+});
+```
+
+---
+
+### How it works
+
+#### The 4 Broadcasting Methods — Complete Map:
+
+```
+Method 1: socket.emit(event, data)
+┌──────────┐                        ┌──────────┐
+│  Server   │ ─────────────────────► │ Client A │  (only Client A)
+│           │                        └──────────┘
+│           │     ✗ Client B
+│           │     ✗ Client C
+└──────────┘
+
+Method 2: socket.broadcast.emit(event, data)
+┌──────────┐                        ┌──────────┐
+│  Server   │     ✗ Client A         │ Client B │ ✓
+│  (from A) │ ─────────────────────► │ Client C │ ✓
+└──────────┘     (everyone EXCEPT A)  └──────────┘
+
+Method 3: io.emit(event, data)
+┌──────────┐                        ┌──────────┐
+│  Server   │ ─────────────────────► │ Client A │ ✓
+│           │ ─────────────────────► │ Client B │ ✓
+│           │ ─────────────────────► │ Client C │ ✓
+└──────────┘     (EVERYONE)          └──────────┘
+
+Method 4: io.to(room).emit(event, data)  ← Phase 5
+┌──────────┐                        ┌──────────┐
+│  Server   │ ─────────────────────► │ Client A │ ✓  (in room "lobby")
+│           │ ─────────────────────► │ Client B │ ✓  (in room "lobby")
+│           │     ✗ Client C          └──────────┘    (NOT in room)
+└──────────┘
+```
+
+#### When to use which method:
+
+| Scenario | Method | Why |
+|----------|--------|-----|
+| Chat message | `io.emit()` | Everyone sees the message (including sender) |
+| "User X joined" | `socket.broadcast.emit()` | Others should know, but the joiner already knows they joined |
+| "User X left" | `socket.broadcast.emit()` | Notify remaining users |
+| Private confirmation | `socket.emit()` | Only tell the sender (e.g., "message saved") |
+| Room message | `io.to(room).emit()` | Only members of that room (Phase 5) |
+
+#### Key Concept: Why `broadcast` for join/leave but `io.emit` for messages?
+
+- **Join notification**: The user who joined doesn't need to be told they joined — they already know. So `socket.broadcast.emit` sends it to everyone else.
+- **Chat message**: The sender ALSO needs to see their message in the chat UI (as confirmation it was delivered). So `io.emit` sends to everyone including the sender.
+- **Alternative pattern**: Some apps use `socket.broadcast.emit` for messages too, and add the message to the sender's UI immediately on the client side (optimistic UI). This feels faster but risks showing a message that the server rejected.
+
+#### Key Concept: Why send `user:count` separately on connect?
+
+When a new client connects:
+1. `socket.broadcast.emit('user:joined')` notifies existing clients with the new count
+2. But the new client itself missed that event (it was the trigger, not a receiver)
+3. So we send `socket.emit('user:count')` to give the new client the current count
+
+This is a common pattern: **broadcast to others + direct message to self** to ensure everyone has the same state.
+
+---
+
+### Interview Questions
+
+**Q1: What is the difference between `io.emit()`, `socket.emit()`, and `socket.broadcast.emit()`?**
+
+> - **`socket.emit(event, data)`** — Sends to ONE specific client (the socket that triggered the event)
+> - **`socket.broadcast.emit(event, data)`** — Sends to ALL clients EXCEPT the sender
+> - **`io.emit(event, data)`** — Sends to ALL connected clients including the sender
+>
+> Think of it like a classroom:
+> - `socket.emit` = teacher whispers to one student
+> - `socket.broadcast.emit` = teacher announces to the class except one student
+> - `io.emit` = teacher announces to the entire class
+
+---
+
+**Q2: In a chat app, should you use `io.emit()` or `socket.broadcast.emit()` for sending messages? What are the trade-offs?**
+
+> **Option A: `io.emit()`** — Server sends the message to ALL clients including sender.
+> - Pro: Single source of truth — the message displayed is exactly what the server processed
+> - Pro: If the server modifies the message (sanitizes, adds timestamp), everyone sees the same version
+> - Con: Slight delay for the sender to see their own message (network round-trip)
+>
+> **Option B: `socket.broadcast.emit()` + optimistic client-side display**
+> - Pro: Sender sees their message instantly (no round-trip wait)
+> - Pro: Feels faster and more responsive
+> - Con: If the server rejects or modifies the message, the sender sees a different version than others
+> - Con: More complex — need to handle the case where the server rejects the message
+>
+> Most production apps use **Option B** with reconciliation (update the optimistic message when server confirms). For learning, **Option A** is simpler and correct.
+
+---
+
+**Q3: Why do we use `socket.broadcast.emit` inside the `disconnect` event instead of `io.emit`?**
+
+> When a client disconnects, the `disconnect` event fires for that socket. At this point:
+> - The disconnected client can no longer receive events
+> - Using `io.emit` would attempt to send to a socket that's already gone (wasted effort)
+> - `socket.broadcast.emit` correctly sends only to the remaining connected clients
+>
+> Technically, `io.emit` would still work because Socket.IO handles the dead socket gracefully, but `broadcast` is semantically correct and slightly more efficient.
+
+---
+
+**Q4: What happens if you call `io.emit()` outside the `io.on('connection')` callback? Is that valid?**
+
+> Yes, it's completely valid. `io.emit()` is a method on the Socket.IO server instance, not on a specific socket. You can call it anywhere you have access to `io`:
+>
+> ```ts
+> // Example: broadcast from a REST endpoint
+> app.post('/api/announcement', (req, res) => {
+>     io.emit('announcement', { text: req.body.message });
+>     res.json({ sent: true });
+> });
+>
+> // Example: broadcast on a timer
+> setInterval(() => {
+>     io.emit('server:time', { time: Date.now() });
+> }, 1000);
+> ```
+>
+> This is a powerful pattern — it lets REST APIs trigger real-time updates to all connected WebSocket clients.
+
+---
+
+**Q5: How does `socket.broadcast` work internally?**
+
+> `socket.broadcast` returns a special `BroadcastOperator` object that, when `.emit()` is called:
+> 1. Iterates over all sockets in the target namespace (default: `/`)
+> 2. Skips the socket that initiated the broadcast (the sender)
+> 3. Sends the event to every remaining socket
+>
+> It's essentially equivalent to:
+> ```ts
+> for (const [id, s] of io.sockets.sockets) {
+>     if (id !== socket.id) {
+>         s.emit(event, data);
+>     }
+> }
+> ```
+> But Socket.IO's implementation is optimized — it doesn't loop in userland; it uses internal adapter methods that are more efficient, especially with Redis adapter for multi-server setups.
+
+---
+
+**Q6: If 1000 users are connected and one sends a message, does the server create 1000 separate packets?**
+
+> With a single Socket.IO server: **yes**, roughly. The server iterates over all connected sockets and sends a WebSocket frame to each. Each frame is a small packet (just the event name + JSON data), so for a chat message this is very efficient.
+>
+> With **Redis adapter** (multi-server, Phase 9): the server publishes the message once to Redis, and each server instance that has connected clients picks it up and distributes locally. This avoids one server needing to manage all 1000 connections.
+>
+> For very large scale (100K+ connections), you'd consider:
+> - Message batching
+> - Binary protocols instead of JSON
+> - Dedicated message brokers (Kafka, NATS)
+> - Client-side pagination (don't send all history)
+
+---
+
+## Phase 5: Rooms & Namespaces — Group Chats, Channels (Next)
 
 **What we'll do:**
-1. Broadcast messages to ALL connected clients (`io.emit`)
-2. Broadcast to everyone EXCEPT sender (`socket.broadcast.emit`)
-3. Show "user joined" / "user left" notifications to everyone
-4. Display messages from different users in the chat UI
-5. Understand the difference between all broadcasting methods
+1. Create chat rooms that users can join/leave
+2. Send messages only to users in the same room
+3. Understand Rooms vs Namespaces and when to use each
+4. Add a room selector UI on the client
+5. Show room-specific user counts

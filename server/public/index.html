@@ -153,6 +153,19 @@
         #messages .msg-text {
             color: #ccc;
         }
+
+        /* Phase 4: Notification & user count styles */
+        #messages .notification {
+            color: #888;
+            font-style: italic;
+            font-size: 0.85rem;
+        }
+
+        #user-count {
+            font-size: 0.9rem;
+            color: #4caf50;
+            margin-top: 0.3rem;
+        }
     </style>
 </head>
 <body>
@@ -162,6 +175,7 @@
 
         <div id="status" class="disconnected">Disconnected</div>
         <div id="socket-id">Socket ID: —</div>
+        <div id="user-count">Online: —</div>
 
         <!-- Phase 3: Message form -->
         <form class="message-form" id="message-form">
@@ -201,10 +215,19 @@
         const messageInput = document.getElementById('message-input');
         const pingBtn = document.getElementById('ping-btn');
 
+        const userCountEl = document.getElementById('user-count');
+
         // Helper: add a message to the messages area
         function addMessage(sender, text) {
             const p = document.createElement('p');
             p.innerHTML = `<span class="sender">${sender}:</span> <span class="msg-text">${text}</span>`;
+            messagesEl.prepend(p);
+        }
+
+        // Helper: add a notification (join/leave) to the messages area
+        function addNotification(text) {
+            const p = document.createElement('p');
+            p.innerHTML = `<span class="notification">${text}</span>`;
             messagesEl.prepend(p);
         }
 
@@ -259,10 +282,30 @@
         pingBtn.addEventListener('click', () => {
             addLog('Pinging server...');
 
-            // emit with a callback — the server calls this callback as acknowledgement
             socket.emit('ping:server', { sentAt: Date.now() }, (response) => {
                 addLog(`Ack received: ${response.message} (status: ${response.status})`);
             });
+        });
+
+        // ──── Phase 4: Broadcasting Events ────
+
+        // Receive user count on initial connection
+        socket.on('user:count', (data) => {
+            userCountEl.textContent = `Online: ${data.totalUsers}`;
+        });
+
+        // Another user joined (broadcast — we receive it, they don't)
+        socket.on('user:joined', (data) => {
+            addNotification(`${data.id.slice(0, 8)}... joined the chat`);
+            userCountEl.textContent = `Online: ${data.totalUsers}`;
+            addLog(`User joined: ${data.id}`);
+        });
+
+        // Another user left (broadcast — we receive it, they don't)
+        socket.on('user:left', (data) => {
+            addNotification(`${data.id.slice(0, 8)}... left the chat`);
+            userCountEl.textContent = `Online: ${data.totalUsers}`;
+            addLog(`User left: ${data.id}`);
         });
     </script>
 
