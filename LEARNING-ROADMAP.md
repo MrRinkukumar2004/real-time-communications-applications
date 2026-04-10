@@ -9,7 +9,7 @@
 | **Phase 3** | Emitting & Listening to Events (messaging basics) | Done |
 | **Phase 4** | Broadcasting — Send messages to all/other users | Done |
 | **Phase 5** | Rooms & Namespaces — Group chats, channels | Done |
-| **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Pending |
+| **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Done |
 | **Phase 7** | Disconnect & Error Handling | Pending |
 | **Phase 8** | CORS, Middleware & Authentication for WebSockets | Pending |
 | **Phase 9** | Scaling — Redis adapter, multiple instances | Pending |
@@ -1022,10 +1022,284 @@ socket.data.username = 'Alice';
 
 ---
 
-## Phase 6: User Tracking — Online Users, Nicknames, Typing Indicator (Next)
+## Phase 6: User Tracking — Online Users, Nicknames, Typing Indicator (Done)
+
+### What was done
+
+We added a username system, online users sidebar, and real-time typing indicator. The app now feels like a real chat application.
+
+**Files changed:**
+
+```
+server/
+├── public/
+│   └── index.html      ← REWRITTEN: Username screen, online users sidebar, typing indicator
+├── src/
+│   └── server.ts       ← UPDATED: user:set-name, user:typing, broadcastRoomUsers, usernames everywhere
+```
+
+**`server.ts`** — Key additions:
+
+```ts
+// Helper: get users in a room with their usernames
+async function getRoomUsers(room: string) {
+    const sockets = await io.in(room).fetchSockets();
+    return sockets.map((s) => ({ id: s.id, username: s.data.username || 'Anonymous' }));
+}
+
+// Broadcast updated users list to everyone in a room
+async function broadcastRoomUsers(room: string) {
+    const users = await getRoomUsers(room);
+    io.to(room).emit('room:users', { room, users });
+}
+
+// Set username (gatekeeper — must set before entering chat)
+socket.on('user:set-name', async (data, callback) => {
+    socket.data.username = data.username;
+    socket.join('general');
+    // ... send rooms, notify others, send users list
+    callback({ status: 'ok', username });
+});
+
+// Typing indicator — broadcast to room except sender
+socket.on('user:typing', (data) => {
+    socket.to(socket.data.currentRoom).emit('user:typing', {
+        id: socket.id,
+        username: socket.data.username,
+        isTyping: data.isTyping,
+    });
+});
+```
+
+**`index.html`** — Three major UI additions:
+
+1. **Username entry screen** — shown first, hides when username is set
+2. **Online users sidebar** — shows all users in current room, highlights you
+3. **Typing indicator** — shows "Alice is typing...", "Alice and Bob are typing...", auto-clears after 2s
+
+```js
+// Client: emit typing on input, auto-stop after 2s
+messageInput.addEventListener('input', () => {
+    socket.emit('user:typing', { isTyping: true });
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+        socket.emit('user:typing', { isTyping: false });
+    }, 2000);
+});
+
+// Client: track who's typing
+socket.on('user:typing', (data) => {
+    if (data.isTyping) typingUsers.set(data.id, data.username);
+    else typingUsers.delete(data.id);
+    updateTypingIndicator();
+});
+```
+
+---
+
+### How it works
+
+#### App Flow — Now with Authentication:
+
+```
+1. Browser loads page
+   └── Username screen shown, chat area hidden
+
+2. User types name and clicks "Join Chat"
+   └── socket.emit('user:set-name', { username }, callback)
+       └── Server validates (2-20 chars)
+       └── Server stores: socket.data.username = username
+       └── Server joins socket to 'general'
+       └── Server broadcasts updated users list to room
+       └── callback({ status: 'ok' }) → client shows chat UI
+
+3. User types a message
+   └── 'input' event on textbox → emit('user:typing', { isTyping: true })
+   └── Other users in room see "Alice is typing..."
+   └── After 2s of no input → emit('user:typing', { isTyping: false })
+
+4. Messages and notifications show usernames instead of socket IDs
+```
+
+#### Key Concept: Debouncing the Typing Indicator
+
+Without debouncing, every keystroke would emit a `user:typing` event (potentially 10+ per second). Instead:
+
+```js
+messageInput.addEventListener('input', () => {
+    socket.emit('user:typing', { isTyping: true });  // Emit on first keystroke
+
+    clearTimeout(typingTimeout);                      // Reset the timer
+    typingTimeout = setTimeout(() => {
+        socket.emit('user:typing', { isTyping: false }); // Stop after 2s idle
+    }, 2000);
+});
+```
+
+This pattern is called **debouncing** — it limits how often the "stop typing" event fires. The "start typing" event fires on every keystroke (cheap), but the "stop" only fires after 2 seconds of silence.
+
+#### Key Concept: `fetchSockets()` — Getting Socket Objects from a Room
+
+```ts
+const sockets = await io.in(room).fetchSockets();
+// Returns an array of RemoteSocket objects with:
+// - s.id          → socket ID
+// - s.data        → the socket.data object
+// - s.rooms       → Set of rooms
+// - s.emit()      → send event to this socket
+```
+
+This is the primary way to query who's in a room and what data they have. It's `async` because in a multi-server setup (Redis adapter), it needs to query across servers.
+
+#### Key Concept: Broadcasting Users List on Every Change
+
+Instead of each client tracking joins/leaves independently (error-prone), we broadcast the FULL users list from the server whenever it changes:
+
+```ts
+// Called on: join, leave, disconnect, set-name
+async function broadcastRoomUsers(room: string) {
+    const users = await getRoomUsers(room);
+    io.to(room).emit('room:users', { room, users });
+}
+```
+
+This is the **full-state broadcast** pattern — simpler and more reliable than incremental updates. The client just replaces its entire users list each time.
+
+#### Key Concept: Gating Actions Behind Username
+
+Before Phase 6, the socket could send messages immediately. Now, the flow is:
+1. Socket connects → only `user:set-name` works
+2. After setting username → server joins the socket to a room
+3. Only then can the user send messages, switch rooms, etc.
+
+This is a simple form of **connection authentication** — the server controls what actions are available based on socket state.
+
+---
+
+### Interview Questions
+
+**Q1: How would you implement a "user is typing..." indicator in Socket.IO?**
+
+> The implementation involves three parts:
+>
+> **Client side:**
+> - Listen for `input` events on the message textbox
+> - Emit `user:typing` with `isTyping: true` on each keystroke
+> - Use a debounce timer (e.g., 2 seconds) to emit `isTyping: false` after the user stops typing
+> - When a message is sent, immediately emit `isTyping: false`
+>
+> **Server side:**
+> - Listen for `user:typing` events
+> - Broadcast to the sender's room using `socket.to(room).emit()` (excludes sender — you don't need to tell yourself you're typing)
+>
+> **Receiving clients:**
+> - Maintain a Map/Set of currently typing users
+> - Add/remove users based on `isTyping` flag
+> - Display: "Alice is typing...", "Alice and Bob are typing...", "3 people are typing..."
+> - Clean up when a user disconnects or sends a message
+
+---
+
+**Q2: What is debouncing and why is it important for typing indicators?**
+
+> Debouncing is a technique that delays execution of a function until after a period of inactivity. For typing indicators:
+>
+> - Without debouncing: every keystroke sends TWO events (start + stop), flooding the server with potentially hundreds of events per minute
+> - With debouncing: "start typing" fires on the first keystroke, "stop typing" fires only once after 2 seconds of silence
+>
+> ```js
+> // Debounced: resets timer on each keystroke
+> clearTimeout(timer);
+> timer = setTimeout(() => emit('stop'), 2000);
+> ```
+>
+> This reduces network traffic from O(keystrokes) to O(typing-sessions), which is especially important with many users.
+
+---
+
+**Q3: What is `socket.data` and how does it differ from using a separate `Map` to store user data?**
+
+> `socket.data` is a built-in property on each Socket.IO socket for storing custom per-connection data.
+>
+> **`socket.data` advantages:**
+> - Automatically cleaned up when the socket disconnects (no memory leaks)
+> - Works with `fetchSockets()` — you can read `socket.data` from remote sockets
+> - Synchronized across servers with the Redis adapter
+> - No need to manage a separate data structure
+>
+> **Separate `Map<socketId, userData>` disadvantages:**
+> - Must manually clean up on disconnect (or risk memory leaks)
+> - Only accessible on the server that owns the Map
+> - Doesn't work across servers in a multi-server setup
+> - Must be kept in sync with socket lifecycle
+>
+> Use `socket.data` for per-connection state. Use a Map/database for shared state that outlives connections.
+
+---
+
+**Q4: Why use `fetchSockets()` to get the users list instead of maintaining a local array?**
+
+> **`fetchSockets()` approach (what we use):**
+> - Always accurate — queries the actual state
+> - Works across multiple servers (Redis adapter)
+> - No sync bugs — can't get out of sync with reality
+> - Slightly slower (async, queries adapter)
+>
+> **Local array approach:**
+> - Faster (synchronous, in-memory)
+> - Must manually add on join, remove on leave AND disconnect
+> - Can get out of sync if you miss an event
+> - Only works on a single server
+>
+> For learning and small-to-medium scale, `fetchSockets()` is the right choice. For very high-frequency queries (e.g., updating users list every second with 10K users), a local cache with invalidation might be needed.
+
+---
+
+**Q5: What is the "full-state broadcast" pattern and when should you use it?**
+
+> Instead of sending incremental updates ("user X joined", "user Y left") and having each client maintain its own state, the server broadcasts the COMPLETE state every time something changes:
+>
+> ```ts
+> // Full-state: server sends the entire list
+> io.to(room).emit('room:users', { users: [allUsers] });
+>
+> // vs Incremental: server sends individual changes
+> socket.to(room).emit('user:joined', { user });
+> socket.to(room).emit('user:left', { user });
+> ```
+>
+> **Use full-state when:** state is small (users list), changes are infrequent, correctness matters more than bandwidth.
+>
+> **Use incremental when:** state is large (chat history), changes are frequent, bandwidth is a concern.
+>
+> We use BOTH in our app: full-state for users list + incremental notifications for the chat messages (join/leave shown as notifications).
+
+---
+
+**Q6: How would you handle username uniqueness in a production app?**
+
+> Our current app doesn't enforce unique usernames. In production:
+>
+> 1. **Server-side Map:** Maintain a `Set` of taken usernames. Check before accepting.
+>    ```ts
+>    const takenNames = new Set<string>();
+>    socket.on('user:set-name', (data, cb) => {
+>        if (takenNames.has(data.username)) return cb({ status: 'error', message: 'Taken' });
+>        takenNames.add(data.username);
+>        socket.data.username = data.username;
+>    });
+>    ```
+> 2. **Clean up on disconnect:** `takenNames.delete(socket.data.username)`
+> 3. **Multi-server:** Use Redis to store taken names across servers
+> 4. **Better approach:** Use a database-backed auth system (JWT, session) and look up the username from the authenticated user
+
+---
+
+## Phase 7: Disconnect & Error Handling (Next)
 
 **What we'll do:**
-1. Add username/nickname support (choose a name on connect)
-2. Track and display the list of online users in the current room
-3. Implement "user is typing..." indicator
-4. Replace socket IDs with usernames in the chat UI
+1. Handle ungraceful disconnects (network failures, browser crashes)
+2. Implement reconnection with state recovery
+3. Add server-side error handling with Socket.IO middleware
+4. Handle edge cases (duplicate connections, stale sockets)
+5. Add connection timeout and heartbeat configuration

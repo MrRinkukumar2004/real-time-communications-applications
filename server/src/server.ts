@@ -10,35 +10,62 @@ const io = new Server(server);
 // Available rooms
 const ROOMS = ['general', 'tech', 'random'];
 
-// Helper: get number of users in a specific room
-async function getRoomSize(room: string): Promise<number> {
+// Helper: get users list in a specific room (with usernames)
+async function getRoomUsers(room: string) {
     const sockets = await io.in(room).fetchSockets();
-    return sockets.length;
+    return sockets.map((s) => ({
+        id: s.id,
+        username: s.data.username || 'Anonymous',
+    }));
+}
+
+// Helper: broadcast updated users list to everyone in a room
+async function broadcastRoomUsers(room: string) {
+    const users = await getRoomUsers(room);
+    io.to(room).emit('room:users', { room, users });
 }
 
 io.on('connection', (socket) => {
     console.log(`[+] User connected    | Socket ID: ${socket.id} | Total: ${io.engine.clientsCount}`);
 
-    // Send available rooms list to the new client
-    socket.emit('room:list', { rooms: ROOMS });
+    // Phase 6: Set username (must be done before joining room)
+    socket.on('user:set-name', async (data, callback) => {
+        const username = data.username?.trim();
 
-    // Auto-join the 'general' room on connect
-    socket.join('general');
-    socket.data.currentRoom = 'general';
-    console.log(`[room] ${socket.id} joined "general"`);
+        if (!username || username.length < 2 || username.length > 20) {
+            callback({ status: 'error', message: 'Username must be 2-20 characters' });
+            return;
+        }
 
-    // Notify others in 'general' that a new user joined
-    socket.to('general').emit('user:joined', { id: socket.id, room: 'general' });
+        socket.data.username = username;
+        console.log(`[user] ${socket.id} set username: "${username}"`);
 
-    // Send room info to the newly connected client
-    getRoomSize('general').then((size) => {
-        socket.emit('room:joined', { room: 'general', userCount: size });
+        // Send available rooms list
+        socket.emit('room:list', { rooms: ROOMS });
+
+        // Auto-join 'general'
+        socket.join('general');
+        socket.data.currentRoom = 'general';
+        console.log(`[room] ${username} joined "general"`);
+
+        // Notify others in 'general'
+        socket.to('general').emit('user:joined', { id: socket.id, username, room: 'general' });
+
+        // Send room info to the client
+        const users = await getRoomUsers('general');
+        socket.emit('room:joined', { room: 'general', users });
+
+        // Broadcast updated users list to everyone in 'general'
+        broadcastRoomUsers('general');
+
+        callback({ status: 'ok', username });
     });
 
     // Phase 5: Join a room
     socket.on('room:join', async (data, callback) => {
         const newRoom = data.room;
         const oldRoom = socket.data.currentRoom;
+        const username = socket.data.username || 'Anonymous';
 
         if (!ROOMS.includes(newRoom)) {
             callback({ status: 'error', message: `Room "${newRoom}" does not exist` });
@@ -52,33 +79,51 @@ io.on('connection', (socket) => {
 
         // Leave old room
         socket.leave(oldRoom);
-        socket.to(oldRoom).emit('user:left', { id: socket.id, room: oldRoom });
-        console.log(`[room] ${socket.id} left "${oldRoom}"`);
+        socket.to(oldRoom).emit('user:left', { id: socket.id, username, room: oldRoom });
+        broadcastRoomUsers(oldRoom);
+        console.log(`[room] ${username} left "${oldRoom}"`);
 
         // Join new room
         socket.join(newRoom);
         socket.data.currentRoom = newRoom;
-        socket.to(newRoom).emit('user:joined', { id: socket.id, room: newRoom });
-        console.log(`[room] ${socket.id} joined "${newRoom}"`);
+        socket.to(newRoom).emit('user:joined', { id: socket.id, username, room: newRoom });
+        console.log(`[room] ${username} joined "${newRoom}"`);
 
-        const userCount = await getRoomSize(newRoom);
-        callback({ status: 'ok', room: newRoom, userCount });
+        const users = await getRoomUsers(newRoom);
+        callback({ status: 'ok', room: newRoom, users });
+
+        // Broadcast updated users list to everyone in new room
+        broadcastRoomUsers(newRoom);
     });
 
-    // Phase 5: Chat message — now scoped to the sender's current room
+    // Chat message — scoped to the sender's current room
     socket.on('chat:message', (data) => {
         const room = socket.data.currentRoom;
-        console.log(`[msg] [${room}] ${socket.id}: ${data.text}`);
+        const username = socket.data.username || 'Anonymous';
+        console.log(`[msg] [${room}] ${username}: ${data.text}`);
 
         const messageData = {
             text: data.text,
             sender: socket.id,
+            username,
             room,
             timestamp: Date.now(),
         };
 
-        // Send to everyone in the room (including sender)
         io.to(room).emit('chat:message', messageData);
+    });
+
+    // Phase 6: Typing indicator
+    socket.on('user:typing', (data) => {
+        const room = socket.data.currentRoom;
+        const username = socket.data.username || 'Anonymous';
+
+        // Broadcast to everyone in room EXCEPT sender
+        socket.to(room).emit('user:typing', {
+            id: socket.id,
+            username,
+            isTyping: data.isTyping,
+        });
     });
 
     // Ping/pong acknowledgement (Phase 3)
@@ -93,11 +138,13 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', (reason) => {
-        console.log(`[-] User disconnected | Socket ID: ${socket.id} | Reason: ${reason} | Total: ${io.engine.clientsCount}`);
+        const username = socket.data.username || 'Anonymous';
+        console.log(`[-] ${username} disconnected | Socket ID: ${socket.id} | Reason: ${reason} | Total: ${io.engine.clientsCount}`);
 
         const room = socket.data.currentRoom;
         if (room) {
-            socket.to(room).emit('user:left', { id: socket.id, room });
+            socket.to(room).emit('user:left', { id: socket.id, username, room });
+            broadcastRoomUsers(room);
         }
     });
 });

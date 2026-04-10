@@ -24,6 +24,8 @@
         .container {
             text-align: center;
             padding: 2rem;
+            width: 100%;
+            max-width: 700px;
         }
 
         h1 {
@@ -66,7 +68,7 @@
             border-radius: 8px;
             max-width: 500px;
             width: 100%;
-            max-height: 300px;
+            max-height: 200px;
             overflow-y: auto;
             font-family: monospace;
             font-size: 0.85rem;
@@ -81,11 +83,11 @@
             color: #888;
         }
 
-        /* Phase 3: Message form styles */
+        /* Message form styles */
         .message-form {
             display: flex;
             gap: 0.5rem;
-            margin-top: 1.5rem;
+            margin-top: 1rem;
             max-width: 500px;
             width: 100%;
         }
@@ -129,14 +131,13 @@
         }
 
         #messages {
-            margin-top: 1rem;
+            margin-top: 0.5rem;
             text-align: left;
             background: #16213e;
             padding: 1rem;
             border-radius: 8px;
-            max-width: 500px;
             width: 100%;
-            max-height: 250px;
+            max-height: 300px;
             overflow-y: auto;
         }
 
@@ -154,7 +155,6 @@
             color: #ccc;
         }
 
-        /* Phase 4: Notification & user count styles */
         #messages .notification {
             color: #888;
             font-style: italic;
@@ -167,7 +167,7 @@
             margin-top: 0.3rem;
         }
 
-        /* Phase 5: Room selector styles */
+        /* Room selector styles */
         .room-selector {
             display: flex;
             gap: 0.5rem;
@@ -204,6 +204,120 @@
             color: #e94560;
             margin-top: 0.3rem;
         }
+
+        /* Phase 6: Username screen */
+        .username-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .username-screen input {
+            padding: 0.8rem 1.2rem;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: #16213e;
+            color: #eee;
+            font-size: 1.1rem;
+            outline: none;
+            text-align: center;
+            width: 280px;
+        }
+
+        .username-screen input:focus {
+            border-color: #e94560;
+        }
+
+        .username-screen button {
+            padding: 0.8rem 2rem;
+            border: none;
+            border-radius: 8px;
+            background: #e94560;
+            color: #fff;
+            font-size: 1.1rem;
+            cursor: pointer;
+        }
+
+        .username-screen button:hover {
+            background: #c73652;
+        }
+
+        .username-screen .error {
+            color: #f44336;
+            font-size: 0.9rem;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Phase 6: Chat layout with sidebar */
+        .chat-layout {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+            max-width: 700px;
+            width: 100%;
+        }
+
+        .chat-main {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .chat-sidebar {
+            width: 160px;
+            flex-shrink: 0;
+        }
+
+        .online-users {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 0.8rem;
+            text-align: left;
+        }
+
+        .online-users h4 {
+            color: #4caf50;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .online-users ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .online-users li {
+            padding: 0.3rem 0;
+            font-size: 0.85rem;
+            color: #ccc;
+        }
+
+        .online-users li.me {
+            color: #e94560;
+            font-weight: bold;
+        }
+
+        /* Phase 6: Typing indicator */
+        #typing-indicator {
+            text-align: left;
+            font-size: 0.8rem;
+            color: #888;
+            font-style: italic;
+            min-height: 1.2rem;
+            margin-top: 0.3rem;
+            padding-left: 0.2rem;
+        }
+
+        #welcome-name {
+            font-size: 0.9rem;
+            color: #e94560;
+            margin-top: 0.3rem;
+        }
     </style>
 </head>
 <body>
@@ -213,36 +327,84 @@
 
         <div id="status" class="disconnected">Disconnected</div>
         <div id="socket-id">Socket ID: —</div>
-        <div id="user-count">In room: —</div>
-        <div id="current-room">Room: —</div>
 
-        <!-- Phase 5: Room selector (buttons generated dynamically) -->
-        <div class="room-selector" id="room-selector"></div>
+        <!-- Phase 6: Username entry screen (shown first) -->
+        <div class="username-screen" id="username-screen">
+            <p style="color: #888;">Choose a username to join the chat</p>
+            <input type="text" id="username-input" placeholder="Enter your name..." maxlength="20" autocomplete="off" />
+            <button id="username-btn">Join Chat</button>
+            <p class="error hidden" id="username-error"></p>
+        </div>
 
-        <!-- Phase 3: Message form -->
-        <form class="message-form" id="message-form">
-            <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" />
-            <button type="submit">Send</button>
-        </form>
+        <!-- Chat area (hidden until username is set) -->
+        <div id="chat-area" class="hidden">
+            <div id="welcome-name">Welcome, —</div>
+            <div id="user-count">In room: —</div>
+            <div id="current-room">Room: —</div>
 
-        <!-- Phase 3: Ping button (demonstrates acknowledgements) -->
-        <button class="ping-btn" id="ping-btn">Ping Server (with Ack)</button>
+            <!-- Room selector -->
+            <div class="room-selector" id="room-selector"></div>
 
-        <!-- Phase 3: Messages area -->
-        <h3 style="margin-top: 1.5rem; color: #e94560;">Messages</h3>
-        <div id="messages"></div>
+            <!-- Chat layout: messages + sidebar -->
+            <div class="chat-layout">
+                <div class="chat-main">
+                    <!-- Message form -->
+                    <form class="message-form" id="message-form">
+                        <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" />
+                        <button type="submit">Send</button>
+                    </form>
 
-        <h3 style="margin-top: 1.5rem; color: #888;">Event Log</h3>
-        <div id="log"></div>
+                    <div id="typing-indicator"></div>
+
+                    <div id="messages"></div>
+                </div>
+
+                <!-- Phase 6: Online users sidebar -->
+                <div class="chat-sidebar">
+                    <div class="online-users">
+                        <h4>Online</h4>
+                        <ul id="users-list"></ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ping button -->
+            <button class="ping-btn" id="ping-btn">Ping Server (with Ack)</button>
+
+            <h3 style="margin-top: 1.5rem; color: #888;">Event Log</h3>
+            <div id="log"></div>
+        </div>
     </div>
 
-    <!-- Socket.IO client library (served automatically by Socket.IO server) -->
+    <!-- Socket.IO client library -->
     <script src="/socket.io/socket.io.js"></script>
 
     <script>
         const statusEl = document.getElementById('status');
         const socketIdEl = document.getElementById('socket-id');
         const logEl = document.getElementById('log');
+        const messagesEl = document.getElementById('messages');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const pingBtn = document.getElementById('ping-btn');
+        const userCountEl = document.getElementById('user-count');
+        const currentRoomEl = document.getElementById('current-room');
+        const roomSelectorEl = document.getElementById('room-selector');
+        const usernameScreen = document.getElementById('username-screen');
+        const usernameInput = document.getElementById('username-input');
+        const usernameBtn = document.getElementById('username-btn');
+        const usernameError = document.getElementById('username-error');
+        const chatArea = document.getElementById('chat-area');
+        const welcomeNameEl = document.getElementById('welcome-name');
+        const usersListEl = document.getElementById('users-list');
+        const typingIndicatorEl = document.getElementById('typing-indicator');
+
+        let currentRoom = null;
+        let myUsername = null;
+
+        // Track who is typing (Map of socketId → username)
+        const typingUsers = new Map();
+        let typingTimeout = null;
 
         // Helper: add a log entry with timestamp
         function addLog(message) {
@@ -251,17 +413,6 @@
             p.innerHTML = `<span class="time">[${time}]</span> ${message}`;
             logEl.prepend(p);
         }
-
-        const messagesEl = document.getElementById('messages');
-        const messageForm = document.getElementById('message-form');
-        const messageInput = document.getElementById('message-input');
-        const pingBtn = document.getElementById('ping-btn');
-
-        const userCountEl = document.getElementById('user-count');
-        const currentRoomEl = document.getElementById('current-room');
-        const roomSelectorEl = document.getElementById('room-selector');
-
-        let currentRoom = null;
 
         // Helper: add a message to the messages area
         function addMessage(sender, text) {
@@ -277,10 +428,36 @@
             messagesEl.prepend(p);
         }
 
+        // Helper: update the online users sidebar
+        function updateUsersList(users) {
+            usersListEl.innerHTML = '';
+            users.forEach((user) => {
+                const li = document.createElement('li');
+                li.textContent = user.username;
+                if (user.id === socket.id) li.className = 'me';
+                usersListEl.appendChild(li);
+            });
+            userCountEl.textContent = `In room: ${users.length}`;
+        }
+
+        // Helper: update typing indicator text
+        function updateTypingIndicator() {
+            const names = Array.from(typingUsers.values());
+            if (names.length === 0) {
+                typingIndicatorEl.textContent = '';
+            } else if (names.length === 1) {
+                typingIndicatorEl.textContent = `${names[0]} is typing...`;
+            } else if (names.length === 2) {
+                typingIndicatorEl.textContent = `${names[0]} and ${names[1]} are typing...`;
+            } else {
+                typingIndicatorEl.textContent = `${names[0]} and ${names.length - 1} others are typing...`;
+            }
+        }
+
         // Connect to the Socket.IO server
         const socket = io();
 
-        // ──── Connection events (Phase 2) ────
+        // ──── Connection events ────
 
         socket.on('connect', () => {
             statusEl.textContent = 'Connected';
@@ -304,38 +481,97 @@
             addLog('Reconnected!');
         });
 
-        // ──── Phase 3: Emitting & Listening to Events ────
+        // ──── Phase 6: Username entry ────
 
-        // 1. Send message: client → server (emit)
+        function submitUsername() {
+            const username = usernameInput.value.trim();
+
+            if (!username || username.length < 2) {
+                usernameError.textContent = 'Username must be at least 2 characters';
+                usernameError.classList.remove('hidden');
+                return;
+            }
+
+            usernameBtn.disabled = true;
+            usernameBtn.textContent = 'Joining...';
+
+            socket.emit('user:set-name', { username }, (response) => {
+                if (response.status === 'ok') {
+                    myUsername = response.username;
+                    usernameScreen.classList.add('hidden');
+                    chatArea.classList.remove('hidden');
+                    welcomeNameEl.textContent = `Welcome, ${myUsername}`;
+                    addLog(`Username set: ${myUsername}`);
+                } else {
+                    usernameError.textContent = response.message;
+                    usernameError.classList.remove('hidden');
+                    usernameBtn.disabled = false;
+                    usernameBtn.textContent = 'Join Chat';
+                }
+            });
+        }
+
+        usernameBtn.addEventListener('click', submitUsername);
+        usernameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submitUsername();
+        });
+
+        // ──── Send message ────
+
         messageForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const text = messageInput.value.trim();
             if (!text) return;
 
-            // Emit a custom event 'chat:message' with data
             socket.emit('chat:message', { text });
             addLog(`Sent: "${text}"`);
             messageInput.value = '';
+
+            // Stop typing indicator when message is sent
+            socket.emit('user:typing', { isTyping: false });
         });
 
-        // 2. Receive message: server → client (listen)
+        // Receive message — now with username
         socket.on('chat:message', (data) => {
             const isMe = data.sender === socket.id;
-            addMessage(isMe ? 'You' : data.sender, data.text);
+            addMessage(isMe ? 'You' : data.username, data.text);
+
+            // Remove sender from typing list when they send a message
+            typingUsers.delete(data.sender);
+            updateTypingIndicator();
         });
 
-        // 3. Ping with acknowledgement (callback pattern)
+        // Ping with acknowledgement
         pingBtn.addEventListener('click', () => {
             addLog('Pinging server...');
-
             socket.emit('ping:server', { sentAt: Date.now() }, (response) => {
                 addLog(`Ack received: ${response.message} (status: ${response.status})`);
             });
         });
 
-        // ──── Phase 5: Rooms ────
+        // ──── Phase 6: Typing indicator ────
 
-        // Receive the list of available rooms from server
+        messageInput.addEventListener('input', () => {
+            socket.emit('user:typing', { isTyping: true });
+
+            // Auto-stop typing after 2 seconds of no input
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                socket.emit('user:typing', { isTyping: false });
+            }, 2000);
+        });
+
+        socket.on('user:typing', (data) => {
+            if (data.isTyping) {
+                typingUsers.set(data.id, data.username);
+            } else {
+                typingUsers.delete(data.id);
+            }
+            updateTypingIndicator();
+        });
+
+        // ──── Rooms ────
+
         socket.on('room:list', (data) => {
             roomSelectorEl.innerHTML = '';
             data.rooms.forEach((room) => {
@@ -348,30 +584,40 @@
             });
         });
 
-        // Confirmation that we joined a room
         socket.on('room:joined', (data) => {
             currentRoom = data.room;
             currentRoomEl.textContent = `Room: #${data.room}`;
-            userCountEl.textContent = `In room: ${data.userCount}`;
             messagesEl.innerHTML = '';
+            typingUsers.clear();
+            updateTypingIndicator();
+            updateUsersList(data.users);
             addNotification(`You joined #${data.room}`);
             updateActiveRoomBtn();
-            addLog(`Joined room: #${data.room} (${data.userCount} users)`);
+            addLog(`Joined room: #${data.room} (${data.users.length} users)`);
         });
 
-        // Another user joined our room
+        // Updated users list broadcast from server
+        socket.on('room:users', (data) => {
+            if (data.room === currentRoom) {
+                updateUsersList(data.users);
+            }
+        });
+
+        // User joined notification — now with username
         socket.on('user:joined', (data) => {
-            addNotification(`${data.id.slice(0, 8)}... joined #${data.room}`);
-            addLog(`User joined #${data.room}: ${data.id}`);
+            addNotification(`${data.username} joined #${data.room}`);
+            addLog(`${data.username} joined #${data.room}`);
         });
 
-        // Another user left our room
+        // User left notification — now with username
         socket.on('user:left', (data) => {
-            addNotification(`${data.id.slice(0, 8)}... left #${data.room}`);
-            addLog(`User left #${data.room}: ${data.id}`);
+            addNotification(`${data.username} left #${data.room}`);
+            addLog(`${data.username} left #${data.room}`);
+            // Remove from typing if they were typing
+            typingUsers.delete(data.id);
+            updateTypingIndicator();
         });
 
-        // Join a room (emit with acknowledgement)
         function joinRoom(room) {
             if (room === currentRoom) return;
 
@@ -379,18 +625,19 @@
                 if (response.status === 'ok') {
                     currentRoom = response.room;
                     currentRoomEl.textContent = `Room: #${response.room}`;
-                    userCountEl.textContent = `In room: ${response.userCount}`;
                     messagesEl.innerHTML = '';
+                    typingUsers.clear();
+                    updateTypingIndicator();
+                    updateUsersList(response.users);
                     addNotification(`You switched to #${response.room}`);
                     updateActiveRoomBtn();
-                    addLog(`Switched to room: #${response.room} (${response.userCount} users)`);
+                    addLog(`Switched to room: #${response.room} (${response.users.length} users)`);
                 } else {
                     addLog(`Failed to join room: ${response.message}`);
                 }
             });
         }
 
-        // Highlight the active room button
         function updateActiveRoomBtn() {
             document.querySelectorAll('.room-btn').forEach((btn) => {
                 btn.classList.toggle('active', btn.dataset.room === currentRoom);
