@@ -11,7 +11,7 @@
 | **Phase 5** | Rooms & Namespaces — Group chats, channels | Done |
 | **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Done |
 | **Phase 7** | Disconnect & Error Handling | Done |
-| **Phase 8** | CORS, Middleware & Authentication for WebSockets | Pending |
+| **Phase 8** | CORS, Middleware & Authentication for WebSockets | Done |
 | **Phase 9** | Scaling — Redis adapter, multiple instances | Pending |
 | **Phase 10** | Production Deployment & Best Practices | Pending |
 
@@ -1593,11 +1593,334 @@ Never trust client data — even in WebSocket. A malicious client can send anyth
 
 ---
 
-## Phase 8: CORS, Middleware & Authentication for WebSockets (Next)
+## Phase 8: CORS, Middleware & Authentication for WebSockets (Done)
+
+### What was done
+
+We added a complete authentication system: REST endpoints for register/login (returns JWT), CORS configuration, and Socket.IO middleware that verifies the JWT before allowing WebSocket connections.
+
+**New file structure:**
+
+```
+server/
+├── public/
+│   └── index.html      ← REWRITTEN: Login/register screen, token-based Socket.IO connection
+├── src/
+│   ├── app.ts          ← UPDATED: JSON parser, POST /api/register, POST /api/login
+│   ├── auth.ts         ← NEW: JWT sign/verify, user register/login logic
+│   └── server.ts       ← UPDATED: CORS config, JWT auth middleware
+```
+
+**`auth.ts`** — JWT utility module:
+
+```ts
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = 'your-secret-key-change-in-production';
+
+export function registerUser(username, password) {
+    // Validate, store in memory Map (use DB in production)
+    users.set(username, password);
+}
+
+export function loginUser(username, password) {
+    // Verify credentials, return signed JWT
+    const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '1h' });
+    return { success: true, token };
+}
+
+export function verifyToken(token) {
+    // Verify and decode JWT, handle expired/invalid
+    const payload = jwt.verify(token, JWT_SECRET);
+    return { valid: true, payload };
+}
+```
+
+**`app.ts`** — REST auth endpoints:
+
+```ts
+app.use(express.json());  // Parse JSON bodies
+
+app.post('/api/register', (req, res) => { /* validate + register */ });
+app.post('/api/login', (req, res) => { /* verify + return JWT */ });
+```
+
+**`server.ts`** — CORS + JWT middleware:
+
+```ts
+const io = new Server(server, {
+    cors: {
+        origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+        methods: ['GET', 'POST'],
+        credentials: true,
+    },
+});
+
+// JWT auth middleware — runs before 'connection' event
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token;  // Client sends token here
+
+    if (!token) return next(new Error('Authentication required'));
+
+    const result = verifyToken(token);
+    if (!result.valid) return next(new Error(`Auth failed: ${result.message}`));
+
+    socket.data.username = result.payload.username;  // Attach to socket
+    next();
+});
+```
+
+**`index.html`** — Client auth flow:
+
+```js
+// 1. Login via REST → get JWT token
+const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+});
+const data = await res.json();
+const token = data.token;
+
+// 2. Connect Socket.IO with the token in auth
+socket = io({
+    auth: { token },  // This is sent in the handshake
+});
+```
+
+---
+
+### How it works
+
+#### The Complete Auth Flow:
+
+```
+┌──────────┐                          ┌──────────┐
+│  Client   │                          │  Server   │
+│ (Browser) │                          │           │
+└─────┬─────┘                          └─────┬─────┘
+      │                                      │
+      │  1. POST /api/register               │
+      │  { username, password }              │
+      ├─────────────────────────────────────►│  Store user in memory/DB
+      │◄─────────────────────────────────────┤  { success: true }
+      │                                      │
+      │  2. POST /api/login                  │
+      │  { username, password }              │
+      ├─────────────────────────────────────►│  Verify credentials
+      │◄─────────────────────────────────────┤  { token: "eyJhbG..." }
+      │                                      │
+      │  3. io({ auth: { token } })          │
+      │  WebSocket handshake + JWT           │
+      ├─────────────────────────────────────►│  Middleware: verifyToken(token)
+      │                                      │  ✓ Valid → socket.data.username = "Alice"
+      │                                      │  ✗ Invalid → next(new Error(...))
+      │◄─────────────────────────────────────┤  'connect' or 'connect_error'
+      │                                      │
+      │  4. Authenticated WebSocket events   │
+      │◄────────────────────────────────────►│  All events now have username
+```
+
+#### Key Concept: How JWT Authentication Works
+
+**JWT (JSON Web Token)** is a compact, self-contained token format:
+
+```
+eyJhbGciOiJIUzI1NiJ9.eyJ1c2VybmFtZSI6IkFsaWNlIiwiaWF0IjoxNjk5...
+└──── Header ────┘.└──────── Payload ────────┘.└──── Signature ────┘
+```
+
+1. **Header**: Algorithm used (HS256)
+2. **Payload**: Data (username, issued-at, expiry)
+3. **Signature**: `HMAC(header + payload, secret)` — proves the token wasn't tampered with
+
+The server signs the token with a secret key. When the client sends it back, the server verifies the signature — if it matches, the payload is trusted.
+
+#### Key Concept: Why REST for Login, WebSocket for Chat?
+
+| Concern | Protocol | Why |
+|---------|----------|-----|
+| Register/Login | HTTP REST | One-time request-response, stateless, cacheable, standard |
+| Chat messaging | WebSocket | Persistent, real-time, bidirectional |
+| Token storage | Client memory/localStorage | Persists across reconnections |
+
+REST APIs are perfect for authentication because login is a one-time action. WebSocket is perfect for chat because it needs persistent real-time communication. The JWT bridges them — obtained via REST, used in WebSocket.
+
+#### Key Concept: `socket.handshake.auth` — How Tokens Reach the Server
+
+```js
+// CLIENT: pass token in the auth option
+const socket = io({ auth: { token: 'eyJ...' } });
+
+// SERVER: read it from the handshake
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token;
+    // verify...
+});
+```
+
+This is the recommended way to authenticate Socket.IO connections. Alternatives:
+- **Query string**: `io({ query: { token } })` — visible in logs, URLs
+- **Headers**: Not supported by WebSocket protocol (only during polling)
+- **Cookies**: Work but require `credentials: true` in CORS
+
+`socket.handshake.auth` is the cleanest — it's sent in the handshake body, not in URLs or headers.
+
+#### Key Concept: CORS for WebSockets
+
+```ts
+const io = new Server(server, {
+    cors: {
+        origin: ['http://localhost:3000'],  // Which origins can connect
+        methods: ['GET', 'POST'],           // For the HTTP handshake
+        credentials: true,                   // Allow auth headers/cookies
+    },
+});
+```
+
+**Why CORS for WebSocket?** The WebSocket protocol itself doesn't enforce CORS. But Socket.IO starts with an HTTP handshake (for polling fallback), which IS subject to CORS. Without proper CORS config:
+- A malicious site at `evil.com` could connect to your Socket.IO server
+- The browser would block the initial HTTP handshake
+
+**In production**: Set `origin` to your actual domain(s), never use `*` with `credentials: true`.
+
+#### Key Concept: Socket Created AFTER Login (Not Before)
+
+```js
+// Phase 6 (before): socket created immediately, authenticated later
+const socket = io();  // Connects immediately
+socket.emit('user:set-name', ...);  // Auth happens after connection
+
+// Phase 8 (now): socket created only after HTTP login
+const res = await fetch('/api/login', ...);  // Get token first
+const socket = io({ auth: { token } });       // Then connect with token
+```
+
+This is more secure: unauthenticated clients never establish a WebSocket connection at all. The middleware rejects them before the `connection` event fires.
+
+---
+
+### Interview Questions
+
+**Q1: How do you authenticate a Socket.IO connection?**
+
+> The recommended approach is JWT-based middleware:
+> 1. Client authenticates via REST API (POST /login) → receives a JWT token
+> 2. Client passes the token when connecting: `io({ auth: { token } })`
+> 3. Server middleware reads `socket.handshake.auth.token` and verifies the JWT
+> 4. If valid → `next()` (connection proceeds). If invalid → `next(new Error(...))` (connection rejected)
+>
+> The client receives rejection via the `connect_error` event. This approach ensures no unauthenticated socket ever triggers the `connection` event.
+
+---
+
+**Q2: What is CORS and why does Socket.IO need it?**
+
+> CORS (Cross-Origin Resource Sharing) is a browser security mechanism that restricts web pages from making requests to a different origin (domain/port).
+>
+> Socket.IO needs CORS because:
+> - The initial connection uses HTTP (for handshake and polling fallback)
+> - If your frontend (`localhost:5173`) connects to your backend (`localhost:3000`), that's a cross-origin request
+> - Without CORS config, the browser blocks the handshake
+>
+> Configure it in the Socket.IO server:
+> ```ts
+> const io = new Server(server, {
+>     cors: { origin: ['http://localhost:5173'], credentials: true }
+> });
+> ```
+> Note: When frontend and backend are on the same origin (same port), CORS isn't needed.
+
+---
+
+**Q3: What is the difference between `socket.handshake.auth`, `socket.handshake.query`, and `socket.handshake.headers`?**
+
+> All three carry data from client to server during the connection handshake:
+>
+> | Property | Set by | Use case | Security |
+> |----------|--------|----------|----------|
+> | `auth` | `io({ auth: { token } })` | Authentication tokens | Best — not in URL |
+> | `query` | `io({ query: { room: 'general' } })` | Non-sensitive params | Visible in URL/logs |
+> | `headers` | `io({ extraHeaders: { ... } })` | Custom headers | Only works with polling, not WebSocket |
+>
+> Always use `auth` for tokens — `query` puts them in the URL where they can be logged by proxies, CDNs, and browser history.
+
+---
+
+**Q4: What happens when a JWT token expires during an active Socket.IO connection?**
+
+> The token is only checked during the initial connection (in middleware). Once connected, the WebSocket stays open — an expired token does NOT automatically disconnect the socket.
+>
+> To handle token expiry during active connections:
+> 1. **Client-side timer**: Track token expiry, refresh before it expires
+> 2. **Server-side periodic check**: Use `io.use()` per-event middleware or check in event handlers
+> 3. **Token refresh flow**: Client emits `auth:refresh` with a refresh token, server issues a new JWT
+> 4. **Forced disconnect**: Server can call `socket.disconnect()` if the token is expired
+>
+> For most apps, checking only at connection time is sufficient — connections rarely outlive a 1-hour token.
+
+---
+
+**Q5: Why use HTTP REST for login instead of emitting a Socket.IO event?**
+
+> 1. **Separation of concerns**: Authentication is a one-time request-response — perfect for REST. Real-time messaging is ongoing — perfect for WebSocket.
+> 2. **Security**: With REST, the unauthenticated client never gets a WebSocket connection. With Socket.IO events, the socket is already connected (consuming server resources) before auth happens.
+> 3. **Standard tooling**: REST login works with API gateways, rate limiters, OAuth providers, and monitoring tools out of the box.
+> 4. **Token reuse**: The JWT from REST login can be reused across page reloads, multiple Socket.IO connections, and even other REST API calls.
+> 5. **Error handling**: HTTP status codes (401, 403) are well-understood. Socket.IO event-based auth requires custom error handling.
+
+---
+
+**Q6: How does `socket.handshake` work? What information does it contain?**
+
+> `socket.handshake` is a frozen snapshot of the HTTP request that initiated the connection:
+>
+> ```ts
+> socket.handshake = {
+>     headers: { ... },              // HTTP headers from the handshake request
+>     query: { EIO: '4', ... },      // URL query parameters
+>     auth: { token: 'eyJ...' },     // Auth data from io({ auth: {...} })
+>     time: '2024-01-01T00:00:00',   // When the handshake happened
+>     address: '127.0.0.1',          // Client IP address
+>     xdomain: false,                // Whether cross-origin
+>     secure: false,                  // Whether HTTPS
+>     url: '/socket.io/',            // Request URL
+>     issued: 1704067200000,         // Timestamp
+> };
+> ```
+>
+> It's available throughout the socket's lifetime and never changes — even if the underlying transport upgrades from polling to WebSocket.
+
+---
+
+**Q7: What are the security risks of WebSocket connections and how does authentication mitigate them?**
+
+> **Risks without authentication:**
+> - **Unauthorized access**: Anyone can connect and listen to events
+> - **Impersonation**: A client can claim to be any user
+> - **Resource exhaustion**: Bots can open thousands of connections
+> - **Data leakage**: Sensitive events broadcast to unauthorized clients
+>
+> **How JWT + middleware mitigates:**
+> - **Connection-level auth**: Rejects unauthenticated connections before `connection` event
+> - **Identity verification**: Token contains the username, signed by the server — can't be forged
+> - **Expiry**: Tokens expire (1h in our case) — stolen tokens have limited lifetime
+> - **Rate limiting**: Combined with middleware, prevents connection flooding
+>
+> **Additional production measures:**
+> - HTTPS/WSS (encrypted transport)
+> - Token refresh mechanism
+> - Per-event authorization (not just per-connection)
+> - Input validation on all received data
+> - IP-based blocking for known bad actors
+
+---
+
+## Phase 9: Scaling — Redis Adapter, Multiple Instances (Next)
 
 **What we'll do:**
-1. Configure CORS for Socket.IO (allow specific origins)
-2. Implement JWT-based authentication via Socket.IO middleware
-3. Protect events — only authenticated sockets can send messages
-4. Add auth token passing from client
-5. Understand the security model of WebSocket connections
+1. Understand why a single Socket.IO server doesn't scale
+2. Install and configure the Redis adapter
+3. Run multiple server instances behind a load balancer
+4. Test that messages work across server instances
+5. Understand sticky sessions and why they're needed

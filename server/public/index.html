@@ -5,11 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Real-Time Chat App</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -21,302 +17,103 @@
             min-height: 100vh;
         }
 
-        .container {
-            text-align: center;
-            padding: 2rem;
-            width: 100%;
-            max-width: 700px;
-        }
+        .container { text-align: center; padding: 2rem; width: 100%; max-width: 700px; }
 
-        h1 {
-            font-size: 2rem;
-            margin-bottom: 1rem;
-            color: #e94560;
-        }
+        h1 { font-size: 2rem; margin-bottom: 1rem; color: #e94560; }
 
         #status {
-            font-size: 1.2rem;
-            padding: 0.8rem 1.5rem;
-            border-radius: 8px;
-            margin-bottom: 1.5rem;
-            display: inline-block;
+            font-size: 1.2rem; padding: 0.8rem 1.5rem; border-radius: 8px;
+            margin-bottom: 1.5rem; display: inline-block;
         }
+        #status.connected { background-color: #0f3d0f; color: #4caf50; border: 1px solid #4caf50; }
+        #status.disconnected { background-color: #3d0f0f; color: #f44336; border: 1px solid #f44336; }
 
-        #status.connected {
-            background-color: #0f3d0f;
-            color: #4caf50;
-            border: 1px solid #4caf50;
-        }
-
-        #status.disconnected {
-            background-color: #3d0f0f;
-            color: #f44336;
-            border: 1px solid #f44336;
-        }
-
-        #socket-id {
-            font-size: 0.9rem;
-            color: #888;
-            margin-top: 0.5rem;
-        }
+        #socket-id { font-size: 0.9rem; color: #888; margin-top: 0.5rem; }
 
         #log {
-            margin-top: 1.5rem;
-            text-align: left;
-            background: #16213e;
-            padding: 1rem;
-            border-radius: 8px;
-            max-width: 500px;
-            width: 100%;
-            max-height: 200px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 0.85rem;
+            margin-top: 1.5rem; text-align: left; background: #16213e; padding: 1rem;
+            border-radius: 8px; max-width: 500px; width: 100%; max-height: 200px;
+            overflow-y: auto; font-family: monospace; font-size: 0.85rem;
         }
+        #log p { padding: 0.3rem 0; border-bottom: 1px solid #1a1a2e; }
+        #log p .time { color: #888; }
 
-        #log p {
-            padding: 0.3rem 0;
-            border-bottom: 1px solid #1a1a2e;
-        }
-
-        #log p .time {
-            color: #888;
-        }
-
-        /* Message form styles */
-        .message-form {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1rem;
-            max-width: 500px;
-            width: 100%;
-        }
-
+        .message-form { display: flex; gap: 0.5rem; margin-top: 1rem; max-width: 500px; width: 100%; }
         .message-form input {
-            flex: 1;
-            padding: 0.7rem 1rem;
-            border: 1px solid #333;
-            border-radius: 8px;
-            background: #16213e;
-            color: #eee;
-            font-size: 1rem;
-            outline: none;
+            flex: 1; padding: 0.7rem 1rem; border: 1px solid #333; border-radius: 8px;
+            background: #16213e; color: #eee; font-size: 1rem; outline: none;
         }
-
-        .message-form input:focus {
-            border-color: #e94560;
-        }
-
+        .message-form input:focus { border-color: #e94560; }
         .message-form button, .ping-btn {
-            padding: 0.7rem 1.2rem;
-            border: none;
-            border-radius: 8px;
-            background: #e94560;
-            color: #fff;
-            font-size: 1rem;
-            cursor: pointer;
+            padding: 0.7rem 1.2rem; border: none; border-radius: 8px;
+            background: #e94560; color: #fff; font-size: 1rem; cursor: pointer;
         }
-
-        .message-form button:hover, .ping-btn:hover {
-            background: #c73652;
-        }
-
-        .ping-btn {
-            margin-top: 0.8rem;
-            background: #0f3460;
-        }
-
-        .ping-btn:hover {
-            background: #1a4a7a;
-        }
+        .message-form button:hover, .ping-btn:hover { background: #c73652; }
+        .ping-btn { margin-top: 0.8rem; background: #0f3460; }
+        .ping-btn:hover { background: #1a4a7a; }
 
         #messages {
-            margin-top: 0.5rem;
-            text-align: left;
-            background: #16213e;
-            padding: 1rem;
-            border-radius: 8px;
-            width: 100%;
-            max-height: 300px;
-            overflow-y: auto;
+            margin-top: 0.5rem; text-align: left; background: #16213e; padding: 1rem;
+            border-radius: 8px; width: 100%; max-height: 300px; overflow-y: auto;
         }
+        #messages p { padding: 0.4rem 0; border-bottom: 1px solid #1a1a2e; }
+        #messages .sender { color: #e94560; font-weight: bold; }
+        #messages .msg-text { color: #ccc; }
+        #messages .notification { color: #888; font-style: italic; font-size: 0.85rem; }
 
-        #messages p {
-            padding: 0.4rem 0;
-            border-bottom: 1px solid #1a1a2e;
-        }
+        #user-count { font-size: 0.9rem; color: #4caf50; margin-top: 0.3rem; }
 
-        #messages .sender {
-            color: #e94560;
-            font-weight: bold;
-        }
-
-        #messages .msg-text {
-            color: #ccc;
-        }
-
-        #messages .notification {
-            color: #888;
-            font-style: italic;
-            font-size: 0.85rem;
-        }
-
-        #user-count {
-            font-size: 0.9rem;
-            color: #4caf50;
-            margin-top: 0.3rem;
-        }
-
-        /* Room selector styles */
-        .room-selector {
-            display: flex;
-            gap: 0.5rem;
-            justify-content: center;
-            margin-top: 1rem;
-            flex-wrap: wrap;
-        }
-
+        .room-selector { display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; flex-wrap: wrap; }
         .room-btn {
-            padding: 0.5rem 1.2rem;
-            border: 1px solid #333;
-            border-radius: 20px;
-            background: #16213e;
-            color: #ccc;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s;
+            padding: 0.5rem 1.2rem; border: 1px solid #333; border-radius: 20px;
+            background: #16213e; color: #ccc; font-size: 0.9rem; cursor: pointer; transition: all 0.2s;
         }
+        .room-btn:hover { border-color: #e94560; color: #fff; }
+        .room-btn.active { background: #e94560; border-color: #e94560; color: #fff; font-weight: bold; }
+        #current-room { font-size: 0.9rem; color: #e94560; margin-top: 0.3rem; }
 
-        .room-btn:hover {
-            border-color: #e94560;
-            color: #fff;
+        /* Phase 8: Auth screen */
+        .auth-screen {
+            display: flex; flex-direction: column; align-items: center; gap: 0.8rem;
         }
-
-        .room-btn.active {
-            background: #e94560;
-            border-color: #e94560;
-            color: #fff;
-            font-weight: bold;
+        .auth-screen input {
+            padding: 0.8rem 1.2rem; border: 1px solid #333; border-radius: 8px;
+            background: #16213e; color: #eee; font-size: 1.1rem; outline: none;
+            text-align: center; width: 280px;
         }
-
-        #current-room {
-            font-size: 0.9rem;
-            color: #e94560;
-            margin-top: 0.3rem;
+        .auth-screen input:focus { border-color: #e94560; }
+        .auth-screen .btn-row { display: flex; gap: 0.5rem; }
+        .auth-screen button {
+            padding: 0.8rem 1.5rem; border: none; border-radius: 8px;
+            color: #fff; font-size: 1rem; cursor: pointer;
         }
+        .auth-screen .btn-register { background: #0f3460; }
+        .auth-screen .btn-register:hover { background: #1a4a7a; }
+        .auth-screen .btn-login { background: #e94560; }
+        .auth-screen .btn-login:hover { background: #c73652; }
+        .auth-screen .error { color: #f44336; font-size: 0.9rem; }
+        .auth-screen .success { color: #4caf50; font-size: 0.9rem; }
 
-        /* Phase 6: Username screen */
-        .username-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1rem;
-        }
+        .hidden { display: none !important; }
 
-        .username-screen input {
-            padding: 0.8rem 1.2rem;
-            border: 1px solid #333;
-            border-radius: 8px;
-            background: #16213e;
-            color: #eee;
-            font-size: 1.1rem;
-            outline: none;
-            text-align: center;
-            width: 280px;
-        }
+        .chat-layout { display: flex; gap: 1rem; margin-top: 1rem; max-width: 700px; width: 100%; }
+        .chat-main { flex: 1; min-width: 0; }
+        .chat-sidebar { width: 160px; flex-shrink: 0; }
+        .online-users { background: #16213e; border-radius: 8px; padding: 0.8rem; text-align: left; }
+        .online-users h4 { color: #4caf50; font-size: 0.85rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        .online-users ul { list-style: none; padding: 0; }
+        .online-users li { padding: 0.3rem 0; font-size: 0.85rem; color: #ccc; }
+        .online-users li.me { color: #e94560; font-weight: bold; }
 
-        .username-screen input:focus {
-            border-color: #e94560;
-        }
-
-        .username-screen button {
-            padding: 0.8rem 2rem;
-            border: none;
-            border-radius: 8px;
-            background: #e94560;
-            color: #fff;
-            font-size: 1.1rem;
-            cursor: pointer;
-        }
-
-        .username-screen button:hover {
-            background: #c73652;
-        }
-
-        .username-screen .error {
-            color: #f44336;
-            font-size: 0.9rem;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        /* Phase 6: Chat layout with sidebar */
-        .chat-layout {
-            display: flex;
-            gap: 1rem;
-            margin-top: 1rem;
-            max-width: 700px;
-            width: 100%;
-        }
-
-        .chat-main {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .chat-sidebar {
-            width: 160px;
-            flex-shrink: 0;
-        }
-
-        .online-users {
-            background: #16213e;
-            border-radius: 8px;
-            padding: 0.8rem;
-            text-align: left;
-        }
-
-        .online-users h4 {
-            color: #4caf50;
-            font-size: 0.85rem;
-            margin-bottom: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .online-users ul {
-            list-style: none;
-            padding: 0;
-        }
-
-        .online-users li {
-            padding: 0.3rem 0;
-            font-size: 0.85rem;
-            color: #ccc;
-        }
-
-        .online-users li.me {
-            color: #e94560;
-            font-weight: bold;
-        }
-
-        /* Phase 6: Typing indicator */
         #typing-indicator {
-            text-align: left;
-            font-size: 0.8rem;
-            color: #888;
-            font-style: italic;
-            min-height: 1.2rem;
-            margin-top: 0.3rem;
-            padding-left: 0.2rem;
+            text-align: left; font-size: 0.8rem; color: #888;
+            font-style: italic; min-height: 1.2rem; margin-top: 0.3rem; padding-left: 0.2rem;
         }
+        #welcome-name { font-size: 0.9rem; color: #e94560; margin-top: 0.3rem; }
 
-        #welcome-name {
-            font-size: 0.9rem;
-            color: #e94560;
-            margin-top: 0.3rem;
+        .token-info {
+            font-size: 0.75rem; color: #555; margin-top: 0.3rem;
+            word-break: break-all; max-width: 280px; text-align: center;
         }
     </style>
 </head>
@@ -328,38 +125,37 @@
         <div id="status" class="disconnected">Disconnected</div>
         <div id="socket-id">Socket ID: —</div>
 
-        <!-- Phase 6: Username entry screen (shown first) -->
-        <div class="username-screen" id="username-screen">
-            <p style="color: #888;">Choose a username to join the chat</p>
-            <input type="text" id="username-input" placeholder="Enter your name..." maxlength="20" autocomplete="off" />
-            <button id="username-btn">Join Chat</button>
-            <p class="error hidden" id="username-error"></p>
+        <!-- Phase 8: Login/Register screen -->
+        <div class="auth-screen" id="auth-screen">
+            <p style="color: #888;">Register or login to join the chat</p>
+            <input type="text" id="auth-username" placeholder="Username" maxlength="20" autocomplete="off" />
+            <input type="password" id="auth-password" placeholder="Password" autocomplete="off" />
+            <div class="btn-row">
+                <button class="btn-register" id="btn-register">Register</button>
+                <button class="btn-login" id="btn-login">Login</button>
+            </div>
+            <p class="error hidden" id="auth-error"></p>
+            <p class="success hidden" id="auth-success"></p>
+            <p class="token-info hidden" id="token-info"></p>
         </div>
 
-        <!-- Chat area (hidden until username is set) -->
+        <!-- Chat area (hidden until authenticated) -->
         <div id="chat-area" class="hidden">
             <div id="welcome-name">Welcome, —</div>
             <div id="user-count">In room: —</div>
             <div id="current-room">Room: —</div>
 
-            <!-- Room selector -->
             <div class="room-selector" id="room-selector"></div>
 
-            <!-- Chat layout: messages + sidebar -->
             <div class="chat-layout">
                 <div class="chat-main">
-                    <!-- Message form -->
                     <form class="message-form" id="message-form">
                         <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" />
                         <button type="submit">Send</button>
                     </form>
-
                     <div id="typing-indicator"></div>
-
                     <div id="messages"></div>
                 </div>
-
-                <!-- Phase 6: Online users sidebar -->
                 <div class="chat-sidebar">
                     <div class="online-users">
                         <h4>Online</h4>
@@ -368,7 +164,6 @@
                 </div>
             </div>
 
-            <!-- Ping button -->
             <button class="ping-btn" id="ping-btn">Ping Server (with Ack)</button>
 
             <h3 style="margin-top: 1.5rem; color: #888;">Event Log</h3>
@@ -380,6 +175,7 @@
     <script src="/socket.io/socket.io.js"></script>
 
     <script>
+        // ──── DOM Elements ────
         const statusEl = document.getElementById('status');
         const socketIdEl = document.getElementById('socket-id');
         const logEl = document.getElementById('log');
@@ -390,23 +186,31 @@
         const userCountEl = document.getElementById('user-count');
         const currentRoomEl = document.getElementById('current-room');
         const roomSelectorEl = document.getElementById('room-selector');
-        const usernameScreen = document.getElementById('username-screen');
-        const usernameInput = document.getElementById('username-input');
-        const usernameBtn = document.getElementById('username-btn');
-        const usernameError = document.getElementById('username-error');
         const chatArea = document.getElementById('chat-area');
         const welcomeNameEl = document.getElementById('welcome-name');
         const usersListEl = document.getElementById('users-list');
         const typingIndicatorEl = document.getElementById('typing-indicator');
 
+        // Phase 8: Auth elements
+        const authScreen = document.getElementById('auth-screen');
+        const authUsername = document.getElementById('auth-username');
+        const authPassword = document.getElementById('auth-password');
+        const btnRegister = document.getElementById('btn-register');
+        const btnLogin = document.getElementById('btn-login');
+        const authError = document.getElementById('auth-error');
+        const authSuccess = document.getElementById('auth-success');
+        const tokenInfo = document.getElementById('token-info');
+
         let currentRoom = null;
         let myUsername = null;
+        let authToken = null;  // Phase 8: JWT token
+        let socket = null;     // Phase 8: Socket created AFTER authentication
 
-        // Track who is typing (Map of socketId → username)
         const typingUsers = new Map();
         let typingTimeout = null;
 
-        // Helper: add a log entry with timestamp
+        // ──── Helpers ────
+
         function addLog(message) {
             const p = document.createElement('p');
             const time = new Date().toLocaleTimeString();
@@ -414,258 +218,274 @@
             logEl.prepend(p);
         }
 
-        // Helper: add a message to the messages area
         function addMessage(sender, text) {
             const p = document.createElement('p');
             p.innerHTML = `<span class="sender">${sender}:</span> <span class="msg-text">${text}</span>`;
             messagesEl.prepend(p);
         }
 
-        // Helper: add a notification (join/leave) to the messages area
         function addNotification(text) {
             const p = document.createElement('p');
             p.innerHTML = `<span class="notification">${text}</span>`;
             messagesEl.prepend(p);
         }
 
-        // Helper: update the online users sidebar
         function updateUsersList(users) {
             usersListEl.innerHTML = '';
             users.forEach((user) => {
                 const li = document.createElement('li');
                 li.textContent = user.username;
-                if (user.id === socket.id) li.className = 'me';
+                if (socket && user.id === socket.id) li.className = 'me';
                 usersListEl.appendChild(li);
             });
             userCountEl.textContent = `In room: ${users.length}`;
         }
 
-        // Helper: update typing indicator text
         function updateTypingIndicator() {
             const names = Array.from(typingUsers.values());
-            if (names.length === 0) {
-                typingIndicatorEl.textContent = '';
-            } else if (names.length === 1) {
-                typingIndicatorEl.textContent = `${names[0]} is typing...`;
-            } else if (names.length === 2) {
-                typingIndicatorEl.textContent = `${names[0]} and ${names[1]} are typing...`;
-            } else {
-                typingIndicatorEl.textContent = `${names[0]} and ${names.length - 1} others are typing...`;
-            }
+            if (names.length === 0) typingIndicatorEl.textContent = '';
+            else if (names.length === 1) typingIndicatorEl.textContent = `${names[0]} is typing...`;
+            else if (names.length === 2) typingIndicatorEl.textContent = `${names[0]} and ${names[1]} are typing...`;
+            else typingIndicatorEl.textContent = `${names[0]} and ${names.length - 1} others are typing...`;
         }
 
-        // Connect to the Socket.IO server
-        const socket = io({
-            // Phase 7: Client reconnection config
-            reconnection: true,              // Enable auto-reconnection (default: true)
-            reconnectionAttempts: 10,        // Max attempts before giving up
-            reconnectionDelay: 1000,         // Initial delay (ms) — doubles each attempt
-            reconnectionDelayMax: 5000,      // Cap the delay at 5 seconds
-            timeout: 20000,                  // Connection timeout (ms)
-        });
+        function showAuthError(msg) {
+            authError.textContent = msg;
+            authError.classList.remove('hidden');
+            authSuccess.classList.add('hidden');
+        }
 
-        // ──── Connection events ────
+        function showAuthSuccess(msg) {
+            authSuccess.textContent = msg;
+            authSuccess.classList.remove('hidden');
+            authError.classList.add('hidden');
+        }
 
-        socket.on('connect', () => {
-            statusEl.textContent = 'Connected';
-            statusEl.className = 'connected';
-            socketIdEl.textContent = `Socket ID: ${socket.id}`;
-            addLog('Connected to server');
-        });
+        // ──── Phase 8: Auth — Register & Login via REST, then connect WebSocket with JWT ────
 
-        socket.on('disconnect', (reason) => {
-            statusEl.textContent = 'Disconnected';
-            statusEl.className = 'disconnected';
-            socketIdEl.textContent = 'Socket ID: —';
-            typingUsers.clear();
-            updateTypingIndicator();
-            addLog(`Disconnected: ${reason}`);
-        });
+        btnRegister.addEventListener('click', async () => {
+            const username = authUsername.value.trim();
+            const password = authPassword.value;
 
-        // Phase 7: Connection error (e.g., server rejected the connection)
-        socket.on('connect_error', (err) => {
-            addLog(`Connection error: ${err.message}`);
-            // If rate limited or auth error, show on username screen
-            if (usernameScreen && !usernameScreen.classList.contains('hidden')) {
-                usernameError.textContent = err.message;
-                usernameError.classList.remove('hidden');
-            }
-        });
+            if (!username || !password) { showAuthError('Username and password required'); return; }
 
-        socket.io.on('reconnect_attempt', (attempt) => {
-            statusEl.textContent = `Reconnecting (${attempt})...`;
-            addLog(`Reconnection attempt #${attempt}...`);
-        });
+            try {
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                const data = await res.json();
 
-        socket.io.on('reconnect', () => {
-            addLog('Reconnected!');
-        });
-
-        socket.io.on('reconnect_failed', () => {
-            statusEl.textContent = 'Connection Lost';
-            addLog('Failed to reconnect after maximum attempts');
-        });
-
-        // Phase 7: Connection state recovery — server restored our session
-        socket.on('connection:recovered', (data) => {
-            myUsername = data.username;
-            currentRoom = data.room;
-
-            // Restore the UI to chat mode
-            usernameScreen.classList.add('hidden');
-            chatArea.classList.remove('hidden');
-            welcomeNameEl.textContent = `Welcome, ${myUsername}`;
-            currentRoomEl.textContent = `Room: #${currentRoom}`;
-
-            addNotification('Connection recovered — you are back!');
-            addLog(`Session recovered: ${myUsername} in #${currentRoom}`);
-        });
-
-        // Phase 7: Server-sent auth error
-        socket.on('error:auth', (data) => {
-            addLog(`Auth error: ${data.message}`);
-        });
-
-        // ──── Phase 6: Username entry ────
-
-        function submitUsername() {
-            const username = usernameInput.value.trim();
-
-            if (!username || username.length < 2) {
-                usernameError.textContent = 'Username must be at least 2 characters';
-                usernameError.classList.remove('hidden');
-                return;
-            }
-
-            usernameBtn.disabled = true;
-            usernameBtn.textContent = 'Joining...';
-
-            socket.emit('user:set-name', { username }, (response) => {
-                if (response.status === 'ok') {
-                    myUsername = response.username;
-                    usernameScreen.classList.add('hidden');
-                    chatArea.classList.remove('hidden');
-                    welcomeNameEl.textContent = `Welcome, ${myUsername}`;
-                    addLog(`Username set: ${myUsername}`);
+                if (data.success) {
+                    showAuthSuccess('Registered! Now click Login.');
                 } else {
-                    usernameError.textContent = response.message;
-                    usernameError.classList.remove('hidden');
-                    usernameBtn.disabled = false;
-                    usernameBtn.textContent = 'Join Chat';
+                    showAuthError(data.message);
+                }
+            } catch (err) {
+                showAuthError('Network error. Try again.');
+            }
+        });
+
+        btnLogin.addEventListener('click', async () => {
+            const username = authUsername.value.trim();
+            const password = authPassword.value;
+
+            if (!username || !password) { showAuthError('Username and password required'); return; }
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                const data = await res.json();
+
+                if (data.success && data.token) {
+                    authToken = data.token;
+                    myUsername = username;
+
+                    // Show token (for learning — never show tokens in production!)
+                    tokenInfo.textContent = `JWT: ${authToken.slice(0, 30)}...`;
+                    tokenInfo.classList.remove('hidden');
+                    showAuthSuccess('Login successful! Connecting...');
+
+                    // Connect Socket.IO with the JWT token
+                    connectSocket(authToken);
+                } else {
+                    showAuthError(data.message);
+                }
+            } catch (err) {
+                showAuthError('Network error. Try again.');
+            }
+        });
+
+        // Allow Enter key to login
+        authPassword.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') btnLogin.click();
+        });
+
+        // ──── Phase 8: Connect Socket.IO with JWT token ────
+
+        function connectSocket(token) {
+            // Create socket with auth token — this is how JWT is passed to Socket.IO
+            socket = io({
+                auth: { token },                   // Phase 8: JWT sent in handshake
+                reconnection: true,
+                reconnectionAttempts: 10,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 20000,
+            });
+
+            // ──── Connection events ────
+
+            socket.on('connect', () => {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'connected';
+                socketIdEl.textContent = `Socket ID: ${socket.id}`;
+
+                // Switch to chat UI
+                authScreen.classList.add('hidden');
+                chatArea.classList.remove('hidden');
+                welcomeNameEl.textContent = `Welcome, ${myUsername}`;
+
+                addLog(`Authenticated & connected as ${myUsername}`);
+            });
+
+            socket.on('disconnect', (reason) => {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'disconnected';
+                socketIdEl.textContent = 'Socket ID: —';
+                typingUsers.clear();
+                updateTypingIndicator();
+                addLog(`Disconnected: ${reason}`);
+            });
+
+            socket.on('connect_error', (err) => {
+                addLog(`Connection error: ${err.message}`);
+                // If auth failed, go back to login screen
+                if (err.message.includes('Authentication')) {
+                    chatArea.classList.add('hidden');
+                    authScreen.classList.remove('hidden');
+                    showAuthError(err.message);
+                    socket.disconnect();
                 }
             });
+
+            socket.io.on('reconnect_attempt', (attempt) => {
+                statusEl.textContent = `Reconnecting (${attempt})...`;
+                addLog(`Reconnection attempt #${attempt}...`);
+            });
+
+            socket.io.on('reconnect', () => { addLog('Reconnected!'); });
+
+            socket.io.on('reconnect_failed', () => {
+                statusEl.textContent = 'Connection Lost';
+                addLog('Failed to reconnect after maximum attempts');
+            });
+
+            // Connection state recovery
+            socket.on('connection:recovered', (data) => {
+                myUsername = data.username;
+                currentRoom = data.room;
+                authScreen.classList.add('hidden');
+                chatArea.classList.remove('hidden');
+                welcomeNameEl.textContent = `Welcome, ${myUsername}`;
+                currentRoomEl.textContent = `Room: #${currentRoom}`;
+                addNotification('Connection recovered — you are back!');
+                addLog(`Session recovered: ${myUsername} in #${currentRoom}`);
+            });
+
+            socket.on('error:auth', (data) => { addLog(`Auth error: ${data.message}`); });
+
+            // ──── Send message ────
+
+            messageForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const text = messageInput.value.trim();
+                if (!text) return;
+                socket.emit('chat:message', { text });
+                addLog(`Sent: "${text}"`);
+                messageInput.value = '';
+                socket.emit('user:typing', { isTyping: false });
+            });
+
+            socket.on('chat:message', (data) => {
+                const isMe = data.sender === socket.id;
+                addMessage(isMe ? 'You' : data.username, data.text);
+                typingUsers.delete(data.sender);
+                updateTypingIndicator();
+            });
+
+            pingBtn.addEventListener('click', () => {
+                addLog('Pinging server...');
+                socket.emit('ping:server', { sentAt: Date.now() }, (response) => {
+                    addLog(`Ack received: ${response.message} (status: ${response.status})`);
+                });
+            });
+
+            // ──── Typing indicator ────
+
+            messageInput.addEventListener('input', () => {
+                socket.emit('user:typing', { isTyping: true });
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    socket.emit('user:typing', { isTyping: false });
+                }, 2000);
+            });
+
+            socket.on('user:typing', (data) => {
+                if (data.isTyping) typingUsers.set(data.id, data.username);
+                else typingUsers.delete(data.id);
+                updateTypingIndicator();
+            });
+
+            // ──── Rooms ────
+
+            socket.on('room:list', (data) => {
+                roomSelectorEl.innerHTML = '';
+                data.rooms.forEach((room) => {
+                    const btn = document.createElement('button');
+                    btn.className = 'room-btn';
+                    btn.textContent = `#${room}`;
+                    btn.dataset.room = room;
+                    btn.addEventListener('click', () => joinRoom(room));
+                    roomSelectorEl.appendChild(btn);
+                });
+            });
+
+            socket.on('room:joined', (data) => {
+                currentRoom = data.room;
+                currentRoomEl.textContent = `Room: #${data.room}`;
+                messagesEl.innerHTML = '';
+                typingUsers.clear();
+                updateTypingIndicator();
+                updateUsersList(data.users);
+                addNotification(`You joined #${data.room}`);
+                updateActiveRoomBtn();
+                addLog(`Joined room: #${data.room} (${data.users.length} users)`);
+            });
+
+            socket.on('room:users', (data) => {
+                if (data.room === currentRoom) updateUsersList(data.users);
+            });
+
+            socket.on('user:joined', (data) => {
+                addNotification(`${data.username} joined #${data.room}`);
+                addLog(`${data.username} joined #${data.room}`);
+            });
+
+            socket.on('user:left', (data) => {
+                addNotification(`${data.username} left #${data.room}`);
+                addLog(`${data.username} left #${data.room}`);
+                typingUsers.delete(data.id);
+                updateTypingIndicator();
+            });
         }
 
-        usernameBtn.addEventListener('click', submitUsername);
-        usernameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') submitUsername();
-        });
-
-        // ──── Send message ────
-
-        messageForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const text = messageInput.value.trim();
-            if (!text) return;
-
-            socket.emit('chat:message', { text });
-            addLog(`Sent: "${text}"`);
-            messageInput.value = '';
-
-            // Stop typing indicator when message is sent
-            socket.emit('user:typing', { isTyping: false });
-        });
-
-        // Receive message — now with username
-        socket.on('chat:message', (data) => {
-            const isMe = data.sender === socket.id;
-            addMessage(isMe ? 'You' : data.username, data.text);
-
-            // Remove sender from typing list when they send a message
-            typingUsers.delete(data.sender);
-            updateTypingIndicator();
-        });
-
-        // Ping with acknowledgement
-        pingBtn.addEventListener('click', () => {
-            addLog('Pinging server...');
-            socket.emit('ping:server', { sentAt: Date.now() }, (response) => {
-                addLog(`Ack received: ${response.message} (status: ${response.status})`);
-            });
-        });
-
-        // ──── Phase 6: Typing indicator ────
-
-        messageInput.addEventListener('input', () => {
-            socket.emit('user:typing', { isTyping: true });
-
-            // Auto-stop typing after 2 seconds of no input
-            clearTimeout(typingTimeout);
-            typingTimeout = setTimeout(() => {
-                socket.emit('user:typing', { isTyping: false });
-            }, 2000);
-        });
-
-        socket.on('user:typing', (data) => {
-            if (data.isTyping) {
-                typingUsers.set(data.id, data.username);
-            } else {
-                typingUsers.delete(data.id);
-            }
-            updateTypingIndicator();
-        });
-
-        // ──── Rooms ────
-
-        socket.on('room:list', (data) => {
-            roomSelectorEl.innerHTML = '';
-            data.rooms.forEach((room) => {
-                const btn = document.createElement('button');
-                btn.className = 'room-btn';
-                btn.textContent = `#${room}`;
-                btn.dataset.room = room;
-                btn.addEventListener('click', () => joinRoom(room));
-                roomSelectorEl.appendChild(btn);
-            });
-        });
-
-        socket.on('room:joined', (data) => {
-            currentRoom = data.room;
-            currentRoomEl.textContent = `Room: #${data.room}`;
-            messagesEl.innerHTML = '';
-            typingUsers.clear();
-            updateTypingIndicator();
-            updateUsersList(data.users);
-            addNotification(`You joined #${data.room}`);
-            updateActiveRoomBtn();
-            addLog(`Joined room: #${data.room} (${data.users.length} users)`);
-        });
-
-        // Updated users list broadcast from server
-        socket.on('room:users', (data) => {
-            if (data.room === currentRoom) {
-                updateUsersList(data.users);
-            }
-        });
-
-        // User joined notification — now with username
-        socket.on('user:joined', (data) => {
-            addNotification(`${data.username} joined #${data.room}`);
-            addLog(`${data.username} joined #${data.room}`);
-        });
-
-        // User left notification — now with username
-        socket.on('user:left', (data) => {
-            addNotification(`${data.username} left #${data.room}`);
-            addLog(`${data.username} left #${data.room}`);
-            // Remove from typing if they were typing
-            typingUsers.delete(data.id);
-            updateTypingIndicator();
-        });
-
         function joinRoom(room) {
-            if (room === currentRoom) return;
-
+            if (room === currentRoom || !socket) return;
             socket.emit('room:join', { room }, (response) => {
                 if (response.status === 'ok') {
                     currentRoom = response.room;

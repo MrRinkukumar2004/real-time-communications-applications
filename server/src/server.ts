@@ -1,20 +1,28 @@
 import { createServer } from "node:http";
 import { app } from "./app.js";
+import { verifyToken } from './auth.js';
 
 import { Server } from 'socket.io';
 const port = process.env.PORT || 3000;
 const server = createServer(app);
 
-// Phase 7: Configure Socket.IO with connection options
+// Phase 8: Configure Socket.IO with CORS + connection options
 const io = new Server(server, {
-    // Heartbeat config — how the server detects dead connections
-    pingInterval: 25000,  // Server sends a ping every 25s
-    pingTimeout: 20000,   // If no pong within 20s, disconnect
+    // CORS configuration — which origins can connect via WebSocket
+    cors: {
+        origin: ['http://localhost:3000', 'http://127.0.0.1:3000'], // Allowed origins
+        methods: ['GET', 'POST'],        // Allowed HTTP methods for handshake
+        credentials: true,                // Allow cookies/auth headers
+    },
 
-    // Connection state recovery — allows seamless reconnection
+    // Heartbeat config
+    pingInterval: 25000,
+    pingTimeout: 20000,
+
+    // Connection state recovery
     connectionStateRecovery: {
-        maxDisconnectionDuration: 2 * 60 * 1000,  // 2 minutes — recover if reconnecting within this window
-        skipMiddlewares: true,                      // Skip middleware on recovery (already authenticated)
+        maxDisconnectionDuration: 2 * 60 * 1000,
+        skipMiddlewares: true,
     },
 });
 
@@ -38,22 +46,22 @@ async function broadcastRoomUsers(room: string) {
 
 // ──── Phase 7: Server-side middleware ────
 
-// Middleware 1: Logging — runs on every new connection attempt
+// Middleware 1: Logging
 io.use((socket, next) => {
     const clientIp = socket.handshake.address;
     const transport = socket.conn.transport.name;
-    console.log(`[middleware] Connection attempt | IP: ${clientIp} | Transport: ${transport}`);
+    console.log(`[middleware:log] Connection attempt | IP: ${clientIp} | Transport: ${transport}`);
     next();
 });
 
-// Middleware 2: Rate limiting — prevent rapid reconnection abuse
+// Middleware 2: Rate limiting
 const connectionTimestamps = new Map<string, number[]>();
 
 io.use((socket, next) => {
     const clientIp = socket.handshake.address;
     const now = Date.now();
-    const windowMs = 60_000; // 1 minute window
-    const maxConnections = 10; // max 10 connections per minute per IP
+    const windowMs = 60_000;
+    const maxConnections = 10;
 
     const timestamps = connectionTimestamps.get(clientIp) || [];
     const recentTimestamps = timestamps.filter((t) => now - t < windowMs);
@@ -61,7 +69,7 @@ io.use((socket, next) => {
     connectionTimestamps.set(clientIp, recentTimestamps);
 
     if (recentTimestamps.length > maxConnections) {
-        console.log(`[middleware] Rate limited: ${clientIp} (${recentTimestamps.length} connections in 1 min)`);
+        console.log(`[middleware:rate] Rate limited: ${clientIp}`);
         next(new Error('Too many connection attempts. Please try again later.'));
         return;
     }
@@ -69,61 +77,63 @@ io.use((socket, next) => {
     next();
 });
 
-io.on('connection', (socket) => {
-    console.log(`[+] User connected    | Socket ID: ${socket.id} | Recovered: ${socket.recovered} | Total: ${io.engine.clientsCount}`);
+// Phase 8: Middleware 3: JWT Authentication
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token;
 
-    // Phase 7: If the connection was recovered, restore state without re-setting username
+    if (!token) {
+        console.log(`[middleware:auth] No token provided | Socket: ${socket.id}`);
+        next(new Error('Authentication required. Please login first.'));
+        return;
+    }
+
+    const result = verifyToken(token);
+
+    if (!result.valid || !result.payload) {
+        console.log(`[middleware:auth] Invalid token | Socket: ${socket.id} | Reason: ${result.message}`);
+        next(new Error(`Authentication failed: ${result.message}`));
+        return;
+    }
+
+    // Attach the authenticated username to socket.data
+    socket.data.username = result.payload.username;
+    console.log(`[middleware:auth] Authenticated: ${result.payload.username}`);
+    next();
+});
+
+io.on('connection', async (socket) => {
+    const username = socket.data.username; // Set by JWT middleware
+    console.log(`[+] ${username} connected | Socket ID: ${socket.id} | Recovered: ${socket.recovered} | Total: ${io.engine.clientsCount}`);
+
+    // Phase 7: If the connection was recovered, restore state
     if (socket.recovered) {
-        const username = socket.data.username;
         const room = socket.data.currentRoom;
         console.log(`[recovery] ${username} recovered in room "${room}"`);
 
-        // Notify the client that recovery succeeded
         socket.emit('connection:recovered', {
             username: socket.data.username,
             room: socket.data.currentRoom,
         });
 
-        // Re-broadcast the users list since we're back
         if (room) {
             socket.to(room).emit('user:joined', { id: socket.id, username, room });
             broadcastRoomUsers(room);
         }
-        return; // Skip the rest — state is already restored
+        return;
     }
 
-    // Phase 6: Set username (must be done before joining room)
-    socket.on('user:set-name', async (data, callback) => {
-        const username = data.username?.trim();
+    // Phase 8: Username is already set by JWT middleware — auto-join 'general'
+    socket.emit('room:list', { rooms: ROOMS });
 
-        if (!username || username.length < 2 || username.length > 20) {
-            callback({ status: 'error', message: 'Username must be 2-20 characters' });
-            return;
-        }
+    socket.join('general');
+    socket.data.currentRoom = 'general';
+    console.log(`[room] ${username} joined "general"`);
 
-        socket.data.username = username;
-        console.log(`[user] ${socket.id} set username: "${username}"`);
+    socket.to('general').emit('user:joined', { id: socket.id, username, room: 'general' });
 
-        // Send available rooms list
-        socket.emit('room:list', { rooms: ROOMS });
-
-        // Auto-join 'general'
-        socket.join('general');
-        socket.data.currentRoom = 'general';
-        console.log(`[room] ${username} joined "general"`);
-
-        // Notify others in 'general'
-        socket.to('general').emit('user:joined', { id: socket.id, username, room: 'general' });
-
-        // Send room info to the client
-        const users = await getRoomUsers('general');
-        socket.emit('room:joined', { room: 'general', users });
-
-        // Broadcast updated users list to everyone in 'general'
-        broadcastRoomUsers('general');
-
-        callback({ status: 'ok', username });
-    });
+    const users = await getRoomUsers('general');
+    socket.emit('room:joined', { room: 'general', users });
+    broadcastRoomUsers('general');
 
     // Phase 5: Join a room
     socket.on('room:join', async (data, callback) => {
