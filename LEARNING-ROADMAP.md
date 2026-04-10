@@ -10,7 +10,7 @@
 | **Phase 4** | Broadcasting — Send messages to all/other users | Done |
 | **Phase 5** | Rooms & Namespaces — Group chats, channels | Done |
 | **Phase 6** | User Tracking — Online users, nicknames, typing indicator | Done |
-| **Phase 7** | Disconnect & Error Handling | Pending |
+| **Phase 7** | Disconnect & Error Handling | Done |
 | **Phase 8** | CORS, Middleware & Authentication for WebSockets | Pending |
 | **Phase 9** | Scaling — Redis adapter, multiple instances | Pending |
 | **Phase 10** | Production Deployment & Best Practices | Pending |
@@ -1295,11 +1295,309 @@ This is a simple form of **connection authentication** — the server controls w
 
 ---
 
-## Phase 7: Disconnect & Error Handling (Next)
+## Phase 7: Disconnect & Error Handling (Done)
+
+### What was done
+
+We hardened the app with server-side middleware, connection state recovery, rate limiting, input validation, and proper error handling on both client and server.
+
+**Files changed:**
+
+```
+server/
+├── public/
+│   └── index.html      ← UPDATED: Reconnection config, recovery handler, error events
+├── src/
+│   └── server.ts       ← UPDATED: Server config, middleware, recovery, validation, disconnecting event
+```
+
+**`server.ts`** — Key additions:
+
+```ts
+// 1. Server configuration — heartbeat + connection state recovery
+const io = new Server(server, {
+    pingInterval: 25000,                    // Ping client every 25s
+    pingTimeout: 20000,                     // Disconnect if no pong in 20s
+    connectionStateRecovery: {
+        maxDisconnectionDuration: 2 * 60 * 1000,  // Recover within 2 min
+        skipMiddlewares: true,                      // Skip auth on recovery
+    },
+});
+
+// 2. Middleware — logging + rate limiting
+io.use((socket, next) => { /* log connection attempts */ next(); });
+io.use((socket, next) => { /* rate limit: 10 connections/min/IP */ });
+
+// 3. Connection recovery — skip re-authentication
+if (socket.recovered) {
+    socket.emit('connection:recovered', { username, room });
+    return; // Skip normal setup
+}
+
+// 4. Input validation on chat messages
+const text = data.text.trim().slice(0, 500); // Limit to 500 chars
+
+// 5. Auth guard — require username before messaging
+if (!socket.data.username) {
+    socket.emit('error:auth', { message: 'Must set username first' });
+    return;
+}
+
+// 6. 'disconnecting' event — fires BEFORE leaving rooms
+socket.on('disconnecting', (reason) => {
+    console.log(`Rooms still available: ${[...socket.rooms]}`);
+});
+
+// 7. Engine-level error handler
+io.engine.on('connection_error', (err) => { /* log transport errors */ });
+```
+
+**`index.html`** — Client improvements:
+
+```js
+// Reconnection config
+const socket = io({
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000,        // Doubles each attempt
+    reconnectionDelayMax: 5000,     // Caps at 5s
+    timeout: 20000,
+});
+
+// Handle recovered connection — restore UI without re-entering username
+socket.on('connection:recovered', (data) => {
+    myUsername = data.username;
+    currentRoom = data.room;
+    // Restore chat UI...
+});
+
+// Handle connection errors
+socket.on('connect_error', (err) => { /* show error */ });
+socket.io.on('reconnect_failed', () => { /* all attempts exhausted */ });
+```
+
+---
+
+### How it works
+
+#### The Heartbeat System (ping/pong):
+
+```
+Server                          Client
+  │                               │
+  ├── ping ───────────────────►   │  (every 25 seconds)
+  │                               ├── pong ──────────────►  (client auto-responds)
+  │   ◄─── within 20s? ──────    │
+  │   YES → connection alive      │
+  │   NO  → disconnect (timeout)  │
+```
+
+Socket.IO uses Engine.IO's heartbeat mechanism to detect dead connections:
+- **`pingInterval: 25000`** — Server sends a ping every 25 seconds
+- **`pingTimeout: 20000`** — If no pong arrives within 20 seconds, the connection is considered dead
+- Total detection time: worst case ~45 seconds to detect a dead connection
+
+#### Connection State Recovery:
+
+```
+1. Client connects → gets session ID + state stored on server
+2. Client disconnects (network drop, tab sleep)
+3. Client reconnects within 2 minutes
+4. Server recognizes the session → restores rooms, socket.data
+5. socket.recovered = true → skip re-authentication
+6. Missed events are replayed to the client
+
+If > 2 minutes: full reconnection required (new session)
+```
+
+This is built into Socket.IO v4.6+ — no Redis needed for single-server setups.
+
+#### Middleware Chain:
+
+```
+Client connects
+  │
+  ▼
+Middleware 1: Logging ──► next()
+  │
+  ▼
+Middleware 2: Rate limit ──► next() or next(new Error(...))
+  │
+  ▼
+io.on('connection') fires ← only if ALL middleware called next()
+```
+
+- Middleware runs BEFORE the `connection` event
+- Call `next()` to proceed, `next(new Error('msg'))` to reject
+- The error message is sent to the client via `connect_error` event
+- Middleware runs in order — first registered, first executed
+
+#### `disconnect` vs `disconnecting`:
+
+| Event | When | `socket.rooms` | Use case |
+|-------|------|----------------|----------|
+| `disconnecting` | Before leaving rooms | Still available | Notify rooms, save state |
+| `disconnect` | After leaving rooms | Empty | Clean up, log |
+
+`disconnecting` is useful when you need to know which rooms the user was in (e.g., to broadcast "user left" to each room). By the time `disconnect` fires, `socket.rooms` is already empty.
+
+#### Input Validation — Defense in Depth:
+
+```ts
+// 1. Guard: require authentication
+if (!socket.data.username) return;
+
+// 2. Type check: ensure data is valid
+if (typeof data.text !== 'string') return;
+
+// 3. Sanitize: trim and limit length
+const text = data.text.trim().slice(0, 500);
+
+// 4. Empty check: don't broadcast empty messages
+if (text.length === 0) return;
+```
+
+Never trust client data — even in WebSocket. A malicious client can send anything.
+
+---
+
+### Interview Questions
+
+**Q1: How does Socket.IO detect if a client has disconnected ungracefully (e.g., network cable pulled)?**
+
+> Socket.IO uses a **heartbeat mechanism** via Engine.IO:
+> 1. The server sends a `ping` packet at regular intervals (`pingInterval`, default 25s)
+> 2. The client must respond with a `pong` within `pingTimeout` (default 20s)
+> 3. If no pong arrives, the server considers the client dead and fires `disconnect` with reason `"ping timeout"`
+>
+> This means ungraceful disconnects are detected within `pingInterval + pingTimeout` (worst case ~45s with defaults). You can tune these values — shorter intervals detect faster but increase network overhead.
+
+---
+
+**Q2: What is Socket.IO Connection State Recovery and how does it work?**
+
+> Connection State Recovery (added in Socket.IO v4.6) allows a client to seamlessly reconnect after a brief disconnection without losing state:
+>
+> 1. Server stores session state (rooms, `socket.data`) with a session ID
+> 2. When client reconnects, it sends its session ID
+> 3. If within `maxDisconnectionDuration`, server restores: rooms, `socket.data`, and replays any missed events
+> 4. `socket.recovered` is `true` on the server
+>
+> Limitations:
+> - Only works with a single server (or with a compatible adapter like Redis)
+> - Events emitted during disconnection are buffered — large buffers = memory pressure
+> - `skipMiddlewares: true` bypasses auth on recovery (security trade-off)
+
+---
+
+**Q3: What is Socket.IO middleware and how does it differ from Express middleware?**
+
+> Socket.IO middleware runs on every new **WebSocket connection** attempt (not HTTP requests):
+>
+> ```ts
+> io.use((socket, next) => {
+>     // socket.handshake contains headers, query, auth data
+>     if (isValid(socket.handshake.auth.token)) next();
+>     else next(new Error('Unauthorized'));
+> });
+> ```
+>
+> Key differences from Express middleware:
+> - Express: runs on every HTTP request. Socket.IO: runs once per connection attempt
+> - Express: `(req, res, next)`. Socket.IO: `(socket, next)`
+> - Express: can modify response. Socket.IO: can only accept/reject connection
+> - Rejection sends error to client via `connect_error` event
+> - Middleware order matters — they run sequentially
+
+---
+
+**Q4: What is the difference between `disconnect` and `disconnecting` events?**
+
+> - **`disconnecting`**: fires BEFORE the socket leaves its rooms. `socket.rooms` still contains all rooms. Use this to notify room members or save per-room state.
+> - **`disconnect`**: fires AFTER the socket has left all rooms. `socket.rooms` is empty. Use this for final cleanup and logging.
+>
+> ```ts
+> socket.on('disconnecting', () => {
+>     for (const room of socket.rooms) {
+>         if (room !== socket.id) { // Skip the auto-joined room
+>             socket.to(room).emit('user:left', { id: socket.id });
+>         }
+>     }
+> });
+> ```
+>
+> This is critical for apps where a socket is in multiple rooms — `disconnect` can't tell you which rooms they were in.
+
+---
+
+**Q5: How would you implement rate limiting for Socket.IO connections?**
+
+> Track connection timestamps per IP and reject if too many within a time window:
+>
+> ```ts
+> const timestamps = new Map<string, number[]>();
+>
+> io.use((socket, next) => {
+>     const ip = socket.handshake.address;
+>     const now = Date.now();
+>     const recent = (timestamps.get(ip) || []).filter(t => now - t < 60000);
+>     recent.push(now);
+>     timestamps.set(ip, recent);
+>
+>     if (recent.length > 10) {
+>         next(new Error('Too many connections'));
+>     } else {
+>         next();
+>     }
+> });
+> ```
+>
+> For production: use Redis to share rate limit state across servers, consider IP spoofing behind proxies (use `X-Forwarded-For`), and implement per-event rate limiting too (not just connections).
+
+---
+
+**Q6: What are all the possible `disconnect` reasons in Socket.IO?**
+
+> **Server-initiated:**
+> | Reason | Cause |
+> |--------|-------|
+> | `server namespace disconnect` | Server called `socket.disconnect()` |
+> | `server shutting down` | Server is closing |
+>
+> **Client-initiated:**
+> | Reason | Cause |
+> |--------|-------|
+> | `client namespace disconnect` | Client called `socket.disconnect()` |
+> | `ping timeout` | Client stopped responding to heartbeats |
+> | `transport close` | Client closed the connection (tab close, navigation) |
+> | `transport error` | Connection encountered an error |
+>
+> Only `client namespace disconnect` and `server namespace disconnect` will NOT trigger automatic reconnection. All other reasons trigger the reconnection mechanism.
+
+---
+
+**Q7: Why should you validate WebSocket data the same way you validate REST API data?**
+
+> A WebSocket connection is just a persistent TCP connection — anyone can send arbitrary data through it. A malicious client can:
+> - Send oversized payloads (DoS via memory exhaustion)
+> - Send wrong data types (crash if you assume structure)
+> - Send messages without authenticating first
+> - Inject scripts in message text (XSS if rendered as HTML)
+>
+> Always validate:
+> 1. **Authentication** — is the socket authorized to perform this action?
+> 2. **Type checking** — is `data.text` actually a string?
+> 3. **Length limits** — cap message length, prevent abuse
+> 4. **Sanitization** — trim whitespace, escape HTML if rendering
+> 5. **Rate limiting** — prevent spam (per-event, not just per-connection)
+
+---
+
+## Phase 8: CORS, Middleware & Authentication for WebSockets (Next)
 
 **What we'll do:**
-1. Handle ungraceful disconnects (network failures, browser crashes)
-2. Implement reconnection with state recovery
-3. Add server-side error handling with Socket.IO middleware
-4. Handle edge cases (duplicate connections, stale sockets)
-5. Add connection timeout and heartbeat configuration
+1. Configure CORS for Socket.IO (allow specific origins)
+2. Implement JWT-based authentication via Socket.IO middleware
+3. Protect events — only authenticated sockets can send messages
+4. Add auth token passing from client
+5. Understand the security model of WebSocket connections

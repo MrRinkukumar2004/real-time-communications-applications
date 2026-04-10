@@ -455,7 +455,14 @@
         }
 
         // Connect to the Socket.IO server
-        const socket = io();
+        const socket = io({
+            // Phase 7: Client reconnection config
+            reconnection: true,              // Enable auto-reconnection (default: true)
+            reconnectionAttempts: 10,        // Max attempts before giving up
+            reconnectionDelay: 1000,         // Initial delay (ms) — doubles each attempt
+            reconnectionDelayMax: 5000,      // Cap the delay at 5 seconds
+            timeout: 20000,                  // Connection timeout (ms)
+        });
 
         // ──── Connection events ────
 
@@ -470,15 +477,53 @@
             statusEl.textContent = 'Disconnected';
             statusEl.className = 'disconnected';
             socketIdEl.textContent = 'Socket ID: —';
+            typingUsers.clear();
+            updateTypingIndicator();
             addLog(`Disconnected: ${reason}`);
         });
 
+        // Phase 7: Connection error (e.g., server rejected the connection)
+        socket.on('connect_error', (err) => {
+            addLog(`Connection error: ${err.message}`);
+            // If rate limited or auth error, show on username screen
+            if (usernameScreen && !usernameScreen.classList.contains('hidden')) {
+                usernameError.textContent = err.message;
+                usernameError.classList.remove('hidden');
+            }
+        });
+
         socket.io.on('reconnect_attempt', (attempt) => {
+            statusEl.textContent = `Reconnecting (${attempt})...`;
             addLog(`Reconnection attempt #${attempt}...`);
         });
 
         socket.io.on('reconnect', () => {
             addLog('Reconnected!');
+        });
+
+        socket.io.on('reconnect_failed', () => {
+            statusEl.textContent = 'Connection Lost';
+            addLog('Failed to reconnect after maximum attempts');
+        });
+
+        // Phase 7: Connection state recovery — server restored our session
+        socket.on('connection:recovered', (data) => {
+            myUsername = data.username;
+            currentRoom = data.room;
+
+            // Restore the UI to chat mode
+            usernameScreen.classList.add('hidden');
+            chatArea.classList.remove('hidden');
+            welcomeNameEl.textContent = `Welcome, ${myUsername}`;
+            currentRoomEl.textContent = `Room: #${currentRoom}`;
+
+            addNotification('Connection recovered — you are back!');
+            addLog(`Session recovered: ${myUsername} in #${currentRoom}`);
+        });
+
+        // Phase 7: Server-sent auth error
+        socket.on('error:auth', (data) => {
+            addLog(`Auth error: ${data.message}`);
         });
 
         // ──── Phase 6: Username entry ────
